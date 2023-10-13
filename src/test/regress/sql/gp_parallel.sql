@@ -304,6 +304,7 @@ select * from t_replica_workers_2 join t_random_workers_0 using(a);
 abort;
 
 --
+-- ex 11_P_5_11
 -- Strewn(worker=N) join SegmentGeneralWorkers(workers=N) with shared hash table.
 -- Join locus: Strewn(worker=N).
 --
@@ -491,10 +492,12 @@ abort;
 create table t1(c1 int, c2 int) using ao_row distributed by (c1);
 create table t2(c1 int, c2 int) using ao_row distributed by (c1);
 create table t3_null(c1 int, c2 int) using ao_row distributed by (c1);
-set enable_parallel = on;
-set gp_appendonly_insert_files = 2;
-set gp_appendonly_insert_files_tuples_range = 100;
-set max_parallel_workers_per_gather = 2;
+begin;
+set local enable_parallel = on;
+set local gp_appendonly_insert_files = 2;
+set local gp_appendonly_insert_files_tuples_range = 100;
+set local max_parallel_workers_per_gather = 2;
+set local enable_parallel_hash = off;
 insert into t1 select i, i from generate_series(1, 5000000) i;
 insert into t2 select i+1, i from generate_series(1, 1200) i;
 insert into t3_null select i+1, i from generate_series(1, 1200) i;
@@ -507,14 +510,47 @@ select sum(t1.c1) from t1 where c1 not in (select c1 from t2);
 explain(costs off) select * from t1 where c1 not in (select c1 from t3_null);
 select * from t1 where c1 not in (select c1 from t3_null);
 -- non-parallel results.
-set enable_parallel = off;
+set local enable_parallel = off;
 select sum(t1.c1) from t1 where c1 not in (select c1 from t2);
 select * from t1 where c1 not in (select c1 from t3_null);
+end;
 drop table t1;
 drop table t2;
 drop table t3_null;
 --
 -- End of Test Parallel Hash Left Anti Semi (Not-In) Join.
+--
+
+--
+-- Test Parallel-aware Hash Left Anti Semi (Not-In) Join.
+--
+begin;
+create table t1(c1 int, c2 int) with(parallel_workers=2) distributed by (c1);
+create table t2(c1 int, c2 int) with(parallel_workers=2) distributed by (c1);
+create table t3_null(c1 int, c2 int) with(parallel_workers=2) distributed by (c1);
+set local enable_parallel = on;
+set local max_parallel_workers_per_gather = 2;
+insert into t1 select i, i from generate_series(1, 500000) i;
+insert into t2 select i, i+1 from generate_series(1, 500000) i;
+insert into t3_null select i, i+1 from generate_series(1, 500000) i;
+insert into t3_null values(NULL, NULL);
+analyze t1;
+analyze t2;
+analyze t3_null;
+explain(costs off) select sum(t1.c1) from t1 where c1 not in (select c2 from t2);
+select sum(t1.c1) from t1 where c1 not in (select c2 from t2);
+explain(costs off) select * from t1 where c1 not in (select c2 from t3_null);
+select * from t1 where c1 not in (select c2 from t3_null);
+-- non-parallel results.
+set local enable_parallel = off;
+select sum(t1.c1) from t1 where c1 not in (select c2 from t2);
+select * from t1 where c1 not in (select c2 from t3_null);
+drop table t1;
+drop table t2;
+drop table t3_null;
+end;
+--
+-- End of Test Parallel-aware Hash Left Anti Semi (Not-In) Join.
 --
 
 --
@@ -595,6 +631,81 @@ set local enable_parallel=on;
 set local enable_parallel_hash=off;
 set local max_parallel_workers_per_gather= 4;
 explain(costs off) select * from t1 right join t2 on t1.b = t2.a;
+abort;
+--
+-- Parallel Refresh AO Materialized View
+--
+create or replace function refresh_compare(ao_row bool, verbose bool, OUT parallel_is_better bool) as $$
+declare
+ t timestamptz;
+ dur0 interval;
+ dur1 interval;
+ results0 RECORD;
+ results1 RECORD;
+begin
+  create table t_p(c1 int, c2 int) with(parallel_workers=8) distributed by(c1);
+  insert into t_p select i, i+1 from generate_series(1, 10000000)i;
+  analyze t_p;
+  if ao_row then
+    create materialized view matv using ao_row as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p a join t_p b on a.c1 = b.c1 with no data distributed by(c2);
+  else
+    create materialized view matv using ao_column as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p a join t_p b on a.c1 = b.c1 with no data distributed by(c2);
+  end if;
+  -- refresh
+  set enable_parallel=off;
+  t = clock_timestamp();
+  refresh materialized view matv;
+  dur0 = age(clock_timestamp(), t);
+  select * into results0 from matv;
+  if refresh_compare.verbose then
+    raise notice 'Non-parallel refresh duration=%', dur0;
+    raise notice 'Non-parallel results=%', results0;
+  end if;
+  -- parallel refresh
+  set enable_parallel=on;
+  t = clock_timestamp();
+  refresh materialized view matv;
+  dur1 = age(clock_timestamp(), t);
+  select * into results1 from matv;
+  if refresh_compare.verbose then
+    raise notice 'Parallel refresh duration=%', dur1;
+    raise notice 'Parallel results=%', results1;
+  end if;
+  -- compare
+  if results0 <> results1 then
+    raise notice 'results of non-parallel % are not equal to parallel %', results0, results1;
+  end if;
+  parallel_is_better = dur0 * 0.8 > dur1; -- Make sure we have significant improvements, given the fluctuations.
+  if NOT parallel_is_better then
+    raise notice 'Non-parallel refresh duration=%', dur0;
+    raise notice 'Parallel refresh duration=%', dur1;
+  end if;
+  drop materialized view  matv;
+  drop table t_p;
+  reset enable_parallel;
+end
+$$ language plpgsql;
+begin;
+set local max_parallel_workers_per_gather = 8;
+select * from refresh_compare(true, false);
+select * from refresh_compare(false, false);
+drop function refresh_compare;
+reset max_parallel_workers_per_gather;
+end;
+
+--
+-- Parallel Create AO/AOCO Table AS
+--
+begin;
+create table t_p2(c1 int, c2 int) with(parallel_workers=2) distributed by(c1);
+insert into t_p2 select i, i+1 from generate_series(1, 10000000)i;
+analyze t_p2;
+set local enable_parallel = off;
+explain(costs off) create table ctas_ao using ao_row as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p2 a join t_p2 b on a.c1 = b.c1 distributed by(c2);
+explain(costs off) create table ctas_aoco using ao_column as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p2 a join t_p2 b on a.c1 = b.c1 distributed by(c2);
+set local enable_parallel = on;
+explain(costs off) create table ctas_ao using ao_row as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p2 a join t_p2 b on a.c1 = b.c1 distributed by(c2);
+explain(costs off) create table ctas_aoco using ao_column as select sum(a.c2) as c2, avg(b.c1) as c1 from t_p2 a join t_p2 b on a.c1 = b.c1 distributed by(c2);
 abort;
 
 -- start_ignore
