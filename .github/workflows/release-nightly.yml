@@ -21,8 +21,8 @@ jobs:
           # mkdir /tmp/release
           #wget https://public-artifacts.obs.cn-north-4.myhuaweicloud.com/script/2024-0516-script/script.tar.gz
           #tar xzf script.tar.gz
-          git config --global user.name "zhangbaowen"
-          git config --global user.email "zhangbaowen@hashdata.cn"
+          # git config --global user.name "zhangbaowen"
+          # git config --global user.email "zhangbaowen@hashdata.cn"
           pwd
           ls -al
           git fetch --tags
