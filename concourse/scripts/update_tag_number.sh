@@ -26,7 +26,7 @@ echo "工作空间是 $GITHUB_WORKSPACE"
 pwd
 ls -al
 
-latest_tag=$(git tag | sort -V -r | head -n 1)
+latest_tag=$(git describe --tags --abbrev=0)
 
 echo "已存在tag最新一条为 $latest_tag"
 # 从最新的 tag 中提取版本号部分作为变量 version
