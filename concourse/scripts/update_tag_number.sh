@@ -20,12 +20,6 @@ else
     mkdir /tmp/release
 fi
 
-# 克隆仓库到目标目录
-#cd /tmp/
-
-#git clone git@github.com:Zhangbaowen-Hashdata/zbw-test-actions.git
-#echo "克隆成功"
-#cd /tmp/zbw-test-actions
 pwd
 ls -al
 
