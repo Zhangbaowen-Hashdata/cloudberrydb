@@ -8,7 +8,6 @@ on:
     - cron: '* 16 * * *'
 
 
-
 jobs:
   Build-rpm:
     runs-on: self-hosted
@@ -49,11 +48,11 @@ jobs:
           ls -al
           cp cloudberrydb-$(echo $main_version | sed 's/^v//')-1.x86_64.rpm /tmp/release
           ls -al /tmp/release
+
       - name: DEBUG
         run: |
           echo "${{ steps.set_value.outputs.NEW_TAG }}"
           echo "${{ steps.set_value.outputs.MAIN_VERSION }}"
-
       - name: release
         uses: softprops/action-gh-release@v1
         with:
