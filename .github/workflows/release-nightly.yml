@@ -35,7 +35,7 @@ jobs:
 
           # git clone git@github.com:cloudberrydb/cloudberrydb.git
           # cd cloudberrydb
-          # ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
+          ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
           make -j16
           make install
           pwd
