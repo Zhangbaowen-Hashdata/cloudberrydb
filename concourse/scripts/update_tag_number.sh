@@ -4,18 +4,20 @@
 echo "工作空间是 $GITHUB_WORKSPACE"
 
 
-#rm -rf /tmp/release/*
-#target_dir="/tmp/zbw-test-actions"
-#timestamp=$(date +"%Y%m%d")
-#
-## 检查目标目录是否存在
-#if [ -d "$target_dir" ]; then
-#    # 如果目录存在，则删除目录
-#    rm -rf "$target_dir"
-#    echo "已删除目录 $target_dir"
-#else
-#    echo "目录 $target_dir 不存在"
-#fi
+
+
+target_dir="/tmp/release"
+timestamp=$(date +"%Y%m%d")
+
+# 检查目标目录是否存在
+if [ -d "$target_dir" ]; then
+    # 如果目录存在，则删除目录
+    rm -rf "$target_dir"
+    echo "已删除目录 $target_dir"
+else
+    echo "目录 $target_dir 不存在"
+    mkdir /tmp/release
+fi
 
 # 克隆仓库到目标目录
 #cd /tmp/
