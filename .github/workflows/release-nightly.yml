@@ -58,7 +58,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: "/tmp/release/*.rpm"
-          name: release "${{ steps.set_value.outputs.NEW_TAG }}"
+          name: v${{ steps.set_value.outputs.NEW_TAG }}
           tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
           prerelease: true
         env:
