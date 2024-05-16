@@ -4,8 +4,9 @@
 echo "工作空间是 $GITHUB_WORKSPACE"
 
 
-
-
+pwd
+ls -al
+git fetch --tags
 target_dir="/tmp/release"
 timestamp=$(date +"%Y%m%d")
 
