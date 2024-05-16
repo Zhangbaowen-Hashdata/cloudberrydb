@@ -31,10 +31,10 @@ jobs:
           echo "新tag是 $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
-#
-#          git clone git@github.com:cloudberrydb/cloudberrydb.git
-#          cd cloudberrydb
-          ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
+
+          git clone git@github.com:cloudberrydb/cloudberrydb.git
+          # cd cloudberrydb
+          # ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
           make -j16
           make install
           pwd
