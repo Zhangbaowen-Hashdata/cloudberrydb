@@ -14,7 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: test-release-nightly
+          fetch-depth: 0
+          ref: 'refs/tags/*'
       - name: run scripts
         id: set_value
         run: |
