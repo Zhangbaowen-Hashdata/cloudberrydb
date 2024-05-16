@@ -25,6 +25,8 @@ jobs:
           git config --global user.email "zhangbaowen@hashdata.cn"
           pwd
           ls -al
+          git describe --tags --abbrev=0
+
           source concourse/scripts/build_cbdb_env.sh
           source concourse/scripts/update_tag_number.sh
           echo "CBDB主版本号是 $main_version"
