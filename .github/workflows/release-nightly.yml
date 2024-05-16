@@ -20,21 +20,21 @@ jobs:
         id: set_value
         run: |
           # mkdir /tmp/release
-          wget https://public-artifacts.obs.cn-north-4.myhuaweicloud.com/script/2024-0516-script/script.tar.gz
-          tar xzf script.tar.gz
+          #wget https://public-artifacts.obs.cn-north-4.myhuaweicloud.com/script/2024-0516-script/script.tar.gz
+          #tar xzf script.tar.gz
           git config --global user.name "zhangbaowen"
           git config --global user.email "zhangbaowen@hashdata.cn"
           pwd
           ls -al
-          source script/build_cbdb_env.sh
-          source script/update_tag_number.sh
+          source concourse/scripts/release/build_cbdb_env.sh
+          source concourse/scripts/release/update_tag_number.sh
           echo "CBDB主版本号是 $main_version"
           echo "新tag是 $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
-
-          git clone git@github.com:cloudberrydb/cloudberrydb.git
-          cd cloudberrydb
+#
+#          git clone git@github.com:cloudberrydb/cloudberrydb.git
+#          cd cloudberrydb
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
           make -j16
           make install
