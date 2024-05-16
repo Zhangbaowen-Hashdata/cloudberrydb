@@ -3,7 +3,7 @@
 # 获取最新的 tag
 echo "工作空间是 $GITHUB_WORKSPACE"
 
-git fetch --tags
+
 #rm -rf /tmp/release/*
 #target_dir="/tmp/zbw-test-actions"
 #timestamp=$(date +"%Y%m%d")
