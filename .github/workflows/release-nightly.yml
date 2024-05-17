@@ -46,8 +46,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git pull
-          git fetch --tags
+          # git pull
+          # git fetch --tags
           echo "工作空间是 $GITHUB_WORKSPACE"
           timestamp=$(date +"%Y%m%d")
           # 检查目标目录是否存在
