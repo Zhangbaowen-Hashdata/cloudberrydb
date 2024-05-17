@@ -44,6 +44,7 @@ jobs:
       - name: get new tag
         id: set_value
         run: |
+          git pull
           git fetch --tags
           echo "工作空间是 $GITHUB_WORKSPACE"
           timestamp=$(date +"%Y%m%d")
