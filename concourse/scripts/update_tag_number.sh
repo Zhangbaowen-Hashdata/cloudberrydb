@@ -3,10 +3,6 @@
 # 获取最新的 tag
 echo "工作空间是 $GITHUB_WORKSPACE"
 
-
-pwd
-ls -al
-
 target_dir="/tmp/release"
 timestamp=$(date +"%Y%m%d")
 
@@ -32,7 +28,7 @@ echo "已存在tag最新一条为 $latest_tag"
 main_version=$(echo $latest_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
 echo "最新的cbdb主版本是$main_version"
 
-new_tag="$main_version.$timestamp-nightly"
+new_tag="$main_version-$timestamp-nightly"
 
 echo "新的 nightly 版本号为: $new_tag"
 

@@ -15,26 +15,59 @@ jobs:
       - uses: actions/checkout@v3
         with:
           ref: test-release-nightly
-      - name: run scripts
+
+      - name: Environmental construction
+        run: |
+          source readmes/README.CentOS.bash
+          sudo yum -y install R apr apr-devel apr-util automake autoconf bash bison bison-devel bzip2 bzip2-devel centos-release-scl curl flex flex-devel gcc gcc-c++ git gdb iproute krb5-devel less libcurl libcurl-devel libevent libevent-devel libxml2 libxml2-devel libyaml libzstd-devel libzstd make openldap openssh openssh-clients openssh-server openssl openssl-devel openssl-libs perl python3-devel readline readline-devel rsync sed sudo tar vim wget which xerces-c-devel zip zlib
+          sudo yum -y install epel-release
+          sudo yum install -y centos-release-scl
+          sudo yum -y install devtoolset-10-gcc devtoolset-10-gcc-c++ devtoolset-10-binutils
+          #scl enable devtoolset-10 bash
+          source /opt/rh/devtoolset-10/enable
+          sudo gcc -v
+          sudo chmod 777 /etc/bashrc
+          sudo echo "source /opt/rh/devtoolset-10/enable" >> /etc/bashrc
+          source /etc/bashrc
+          sudo chmod 644 /etc/bashrc
+          sudo ln -sf /usr/bin/cmake3 /usr/local/bin/cmake
+          sudo chmod 777 /etc/ld.so.conf
+          sudo echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
+          sudo ldconfig
+          echo "环境搭建完成"
+
+      - name: get new tag
         id: set_value
         run: |
-          # mkdir /tmp/release
-          #wget https://public-artifacts.obs.cn-north-4.myhuaweicloud.com/script/2024-0516-script/script.tar.gz
-          #tar xzf script.tar.gz
-          # git config --global user.name "zhangbaowen"
-          # git config --global user.email "zhangbaowen@hashdata.cn"
-          pwd
-          ls -al
           git fetch --tags
-          source concourse/scripts/build_cbdb_env.sh
-          source concourse/scripts/update_tag_number.sh
+          echo "工作空间是 $GITHUB_WORKSPACE"
+          target_dir="/tmp/release"
+          timestamp=$(date +"%Y%m%d")
+          # 检查目标目录是否存在
+          if [ -d "$target_dir" ]; then
+              # 如果目录存在，则删除目录
+              rm -rf "$target_dir"
+              echo "已删除目录 $target_dir"
+          else
+              echo "目录 $target_dir 不存在"
+              mkdir /tmp/release
+          fi
+
+          latest_tag=$(git tag | sort -V -r | head -n 1)
+          echo "已存在tag最新一条为 $latest_tag"
+          main_version=$(echo $latest_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+          echo "最新的cbdb主版本是$main_version"
+          new_tag="$main_version-$timestamp-nightly"
+          echo "新的 nightly 版本号为: $new_tag"
+          cd $GITHUB_WORKSPACE
+
           echo "CBDB主版本号是 $main_version"
           echo "新tag是 $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
-          # git clone git@github.com:cloudberrydb/cloudberrydb.git
-          # cd cloudberrydb
+      - name: build_rpm
+        run: |
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
           make -j16
           make install
@@ -44,11 +77,11 @@ jobs:
           echo "制作rpm包"
           mkdir -p tmp/usr/local/cloudberrydb
           sudo cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
-          fpm -s dir -t rpm -n cloudberrydb -v $(echo $main_version | sed 's/^v//') -p ./ -C tmp
+          fpm -s dir -t rpm -n cloudberrydb -v ${{ steps.set_value.outputs.MAIN_VERSION }} -p ./ -C tmp
           pwd
           ls -al
-          cp cloudberrydb-$(echo $main_version | sed 's/^v//')-1.x86_64.rpm /tmp/release
-          ls -al /tmp/release
+          cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.x86_64.rpm /tmp/release
+          ls -al /tmp/release/
 
       - name: DEBUG
         run: |
