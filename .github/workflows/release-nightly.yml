@@ -43,6 +43,8 @@ jobs:
 
       - name: get new tag
         id: set_value
+        env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git pull
           git fetch --tags
