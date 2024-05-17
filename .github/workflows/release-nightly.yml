@@ -46,17 +46,10 @@ jobs:
         run: |
           git fetch --tags
           echo "工作空间是 $GITHUB_WORKSPACE"
-          target_dir="/tmp/release/"
           timestamp=$(date +"%Y%m%d")
           # 检查目标目录是否存在
-          if [ -d "$target_dir" ]; then
-              # 如果目录存在，则删除目录
-              rm -rf "$target_dir"
-              echo "已删除目录 $target_dir"
-          else
-              echo "目录 $target_dir 不存在"
-              mkdir /tmp/release/
-          fi
+          rm -rf /tmp/release
+          mkdir /tmp/release
 
           latest_tag=$(git tag | sort -V -r | head -n 1)
           echo "已存在tag最新一条为 $latest_tag"
