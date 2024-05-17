@@ -46,7 +46,7 @@ jobs:
         run: |
           git fetch --tags
           echo "工作空间是 $GITHUB_WORKSPACE"
-          target_dir="/tmp/release"
+          target_dir="/tmp/release/"
           timestamp=$(date +"%Y%m%d")
           # 检查目标目录是否存在
           if [ -d "$target_dir" ]; then
@@ -55,7 +55,7 @@ jobs:
               echo "已删除目录 $target_dir"
           else
               echo "目录 $target_dir 不存在"
-              mkdir /tmp/release
+              mkdir /tmp/release/
           fi
 
           latest_tag=$(git tag | sort -V -r | head -n 1)
