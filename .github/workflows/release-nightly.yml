@@ -64,6 +64,7 @@ jobs:
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
+
       - name: build_rpm
         run: |
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
