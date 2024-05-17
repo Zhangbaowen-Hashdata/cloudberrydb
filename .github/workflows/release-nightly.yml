@@ -18,7 +18,12 @@ jobs:
 
       - name: Environmental construction
         run: |
-          source readmes/README.CentOS.bash
+
+          pushd $GITHUB_WORKSPACE
+          pushd readmes
+          source README.CentOS.bash
+          popd
+
           sudo yum -y install R apr apr-devel apr-util automake autoconf bash bison bison-devel bzip2 bzip2-devel centos-release-scl curl flex flex-devel gcc gcc-c++ git gdb iproute krb5-devel less libcurl libcurl-devel libevent libevent-devel libxml2 libxml2-devel libyaml libzstd-devel libzstd make openldap openssh openssh-clients openssh-server openssl openssl-devel openssl-libs perl python3-devel readline readline-devel rsync sed sudo tar vim wget which xerces-c-devel zip zlib
           sudo yum -y install epel-release
           sudo yum install -y centos-release-scl
