@@ -39,7 +39,7 @@ jobs:
           sudo chmod 777 /etc/ld.so.conf
           sudo echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
           sudo ldconfig
-          echo "环境搭建完成"
+          echo "Environment setup completed ！！！"
 
       - name: get new tag
         id: set_value
@@ -48,22 +48,19 @@ jobs:
         run: |
           sudo git pull
           sudo git fetch origin --tags
-          echo "工作空间是 $GITHUB_WORKSPACE"
+          echo "The workspace is $GITHUB_WORKSPACE"
           timestamp=$(date +"%Y%m%d")
-          # 检查目标目录是否存在
+
           rm -rf /tmp/release
           mkdir /tmp/release
 
           latest_tag=$(git tag | sort -V -r | head -n 1)
-          echo "已存在tag最新一条为 $latest_tag"
           main_version=$(echo $latest_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
-          echo "最新的cbdb主版本是$main_version"
           new_tag="$main_version-$timestamp-nightly"
-          echo "新的 nightly 版本号为: $new_tag"
-          cd $GITHUB_WORKSPACE
 
-          echo "CBDB主版本号是 $main_version"
-          echo "新tag是 $new_tag"
+          echo "The latest tag that already exists is $latest_tag"
+          echo "The main version is $main_version"
+          echo "The new tag is $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
