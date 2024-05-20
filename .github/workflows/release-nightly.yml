@@ -91,4 +91,4 @@ jobs:
           tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
           prerelease: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_NIGHTLY }}
