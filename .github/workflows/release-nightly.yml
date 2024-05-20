@@ -63,7 +63,7 @@ jobs:
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
 
-          git tag $new_tag
+          sudo git tag $new_tag
           git tag
           previous_tag=$latest_tag
           current_tag="$new_tag
