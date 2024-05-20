@@ -12,7 +12,7 @@ jobs:
   Build-rpm:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
       - name: Environmental construction
         run: |
 
