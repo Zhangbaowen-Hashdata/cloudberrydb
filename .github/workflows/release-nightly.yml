@@ -63,6 +63,28 @@ jobs:
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
 
+          git tag $new_tag
+          git tag
+          previous_tag=$latest_tag
+          current_tag="$new_tag
+          # 获取从上一个标签到当前标签之间的提交记录
+          commit_logs=$(git log --oneline $previous_tag..$current_tag)
+          # 整理提交记录为发布说明格式
+          release_notes="Release Notes:\n"
+          while IFS= read -r line; do
+              commit_message=$(echo $line | cut -d ' ' -f 2-)  # 提取提交信息
+              change_details=$(echo $line | cut -d ' ' -f 1)   # 提取变更内容
+              release_notes+="\n- $commit_message: $change_details"
+          done <<< "$commit_logs"
+
+          # 将整理后的发布说明附加到文件中
+          echo -e "$release_notes" >> RELEASE_NOTES.md
+
+          echo "Release notes have been updated in RELEASE_NOTES.md"
+          cat RELEASE_NOTES.md
+          pwd
+          ls -al
+
       - name: build_rpm
         run: |
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
