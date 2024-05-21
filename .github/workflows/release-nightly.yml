@@ -45,7 +45,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           sudo git pull
-          sudo git fetch origin --tags
+          # sudo git fetch origin --tags
           echo "The workspace is $GITHUB_WORKSPACE"
           timestamp=$(date +"%Y%m%d")
 
