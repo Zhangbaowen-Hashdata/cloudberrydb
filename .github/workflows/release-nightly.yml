@@ -114,6 +114,7 @@ jobs:
           files: "/tmp/release/*.rpm"
           name: v${{ steps.set_value.outputs.NEW_TAG }}
           tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
+          body_path: RELEASE_NOTES.md
           prerelease: true
           generate_release_notes: true
         env:
