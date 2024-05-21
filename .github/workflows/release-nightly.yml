@@ -115,5 +115,6 @@ jobs:
           name: v${{ steps.set_value.outputs.NEW_TAG }}
           tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
           prerelease: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_NIGHTLY }}
