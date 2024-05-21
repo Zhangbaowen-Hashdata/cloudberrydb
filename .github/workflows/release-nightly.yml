@@ -14,6 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
+          repository: Zhangbaowen-Hashdata/cloudberrydb
+          ssh-key: ${{ secrets.SSH_PRIVATE_KEY }}
           ref: test-release-nightly
       - name: Environmental construction
         run: |
