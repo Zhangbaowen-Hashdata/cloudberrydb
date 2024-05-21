@@ -66,11 +66,11 @@ jobs:
           sudo git tag $new_tag
           git tag
           previous_tag=$latest_tag
-          current_tag="$new_tag
+          current_tag=$new_tag
           # 获取从上一个标签到当前标签之间的提交记录
           commit_logs=$(git log --oneline $previous_tag..$current_tag)
           # 整理提交记录为发布说明格式
-          release_notes="Release Notes:\n"
+          release_notes="What's Changed:\n"
           while IFS= read -r line; do
               commit_message=$(echo $line | cut -d ' ' -f 2-)  # 提取提交信息
               change_details=$(echo $line | cut -d ' ' -f 1)   # 提取变更内容
