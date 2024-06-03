@@ -1,120 +1,95 @@
-name: Build and Release RPM
-
+name: Build and Release RPM Nightly
 on:
   push:
-    branches:
-      - test-release-nightly
   schedule:
     - cron: '* 16 * * *'
-
-
 jobs:
   Build-rpm:
-    runs-on: self-hosted
+    runs-on: label-7
     steps:
       - uses: actions/checkout@v3
         with:
           ref: test-release-nightly
-      - name: Environmental construction
+          fetch-depth: 0
+      - name: Environment Setup
         run: |
-
+          # sudo ln -sf /opt/rh/rh-git218/root/usr/bin/git /usr/bin/git
+          whoami
           pushd $GITHUB_WORKSPACE
-          pushd readmes
-          source README.CentOS.bash
+          pushd deploy/build
+          # source README.CentOS.bash
+          sudo bash README.CentOS.bash
           popd
-
-          sudo yum -y install R apr apr-devel apr-util automake autoconf bash bison bison-devel bzip2 bzip2-devel centos-release-scl curl flex flex-devel gcc gcc-c++ git gdb iproute krb5-devel less libcurl libcurl-devel libevent libevent-devel libxml2 libxml2-devel libyaml libzstd-devel libzstd make openldap openssh openssh-clients openssh-server openssl openssl-devel openssl-libs perl python3-devel readline readline-devel rsync sed sudo tar vim wget which xerces-c-devel zip zlib
-          sudo yum -y install epel-release
-          sudo yum install -y centos-release-scl
-          sudo yum -y install devtoolset-10-gcc devtoolset-10-gcc-c++ devtoolset-10-binutils
-          #scl enable devtoolset-10 bash
-          source /opt/rh/devtoolset-10/enable
-          sudo gcc -v
-          sudo chmod 777 /etc/bashrc
-          sudo echo "source /opt/rh/devtoolset-10/enable" >> /etc/bashrc
-          source /etc/bashrc
-          sudo chmod 644 /etc/bashrc
-          sudo ln -sf /usr/bin/cmake3 /usr/local/bin/cmake
+          sudo yum -y install R apr apr-devel apr-util automake zip zlib \
+                      autoconf bash bison bison-devel bzip2 bzip2-devel \
+                      centos-release-scl curl flex flex-devel gcc gcc-c++ \
+                      git gdb iproute krb5-devel less libcurl libcurl-devel \
+                      libevent libevent-devel libxml2 libxml2-devel libyaml \
+                      libzstd-devel libzstd make openldap openssh  vim wget \
+                      openssh-server openssl openssl-devel openssl-libs perl \
+                      python3-devel readline readline-devel rsync sed sudo tar \
+                      which xerces-c-devel openssh-clients cmake3 scl-utils
+          sudo yum -y install epel-release centos-release-scl devtoolset-10-gcc \
+                      devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
+          # source scl_source enable devtoolset-10
+          echo 1111111
+          # rm -rf /usr/bin/gcc
+          echo 22222222
+          # sudo ln -sf /usr/bin/cmake3 /usr/local/bin/cmake
+          # sudo ln -sf /opt/rh/devtoolset-10/root/usr/bin/gcc /usr/bin/gcc
+          echo 33333333
           sudo chmod 777 /etc/ld.so.conf
-          sudo echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
+          echo 44444444
+          echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
+          echo 55555555
           sudo ldconfig
+          echo 66666666
           echo "Environment setup completed ！！！"
-
-      - name: get new tag
+          gcc -v
+      - name: Get New Tag
         id: set_value
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          sudo git pull
-          sudo git tag -d $(git tag)
-          sudo git fetch --tags
+          git tag -d $(git tag)
+          git fetch --tags
           echo "The workspace is $GITHUB_WORKSPACE"
           timestamp=$(date +"%Y%m%d")
-
-          rm -rf /tmp/release
-          mkdir /tmp/release
-
-          latest_tag=$(git tag | sort -V -r | head -n 1)
-          main_version=$(echo $latest_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+          rm -rf /tmp/release && mkdir /tmp/release
+          old_tag=$(git tag | sort -V -r | head -n 1)
+          main_version=$(echo $old_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
           new_tag="$main_version-$timestamp-nightly"
-
-          echo "The latest tag that already exists is $latest_tag"
+          echo "The old tag that already exists is $old_tag"
           echo "The main version is $main_version"
           echo "The new tag is $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
-
-
           sudo git tag $new_tag
           git tag
-          previous_tag=$latest_tag
-          current_tag=$new_tag
-          # 获取从上一个标签到当前标签之间的提交记录
-          commit_logs=$(git log --oneline $previous_tag..$current_tag)
-          # 整理提交记录为发布说明格式
-          release_notes="# What's Changed:\n"
-          while IFS= read -r line; do
-              commit_message=$(echo $line | cut -d ' ' -f 2-)  # 提取提交信息
-              change_details=$(echo $line | cut -d ' ' -f 1)   # 提取变更内容
-              release_notes+="\n- $commit_message: $change_details"
-          done <<< "$commit_logs"
-
-          # 将整理后的发布说明附加到文件中
-          echo -e "$release_notes" >> RELEASE_NOTES.md
-
-          echo "Release notes have been updated in RELEASE_NOTES.md"
-          cat RELEASE_NOTES.md
-          pwd
-          ls -al
-
-      - name: build_rpm
+      - name: Build RPM Package
         run: |
+          gcc -v
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
-          make -j16
-          make install
-          pwd
-          ruby -v
+          make -j16 && make install
+          which ruby
+          pwd && ruby -v
+          source ~/.bashrc
           fpm --version
-          echo "制作rpm包"
+          echo "build rpm package"
           mkdir -p tmp/usr/local/cloudberrydb
-          sudo cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
+          cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
           fpm -s dir -t rpm -n cloudberrydb -v ${{ steps.set_value.outputs.MAIN_VERSION }} -p ./ -C tmp
-          pwd
-          ls -al
           cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.x86_64.rpm /tmp/release
-          ls -al /tmp/release/
-
       - name: DEBUG
         run: |
           echo "${{ steps.set_value.outputs.NEW_TAG }}"
           echo "${{ steps.set_value.outputs.MAIN_VERSION }}"
-      - name: release
+      - name: Release
         uses: softprops/action-gh-release@v1
         with:
           files: "/tmp/release/*.rpm"
           name: v${{ steps.set_value.outputs.NEW_TAG }}
           tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
-          body_path: RELEASE_NOTES.md
           prerelease: true
           generate_release_notes: true
         env:
