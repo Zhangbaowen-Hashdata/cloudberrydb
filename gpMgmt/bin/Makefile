@@ -15,11 +15,11 @@ $(recurse)
 PROGRAMS= analyzedb gpactivatestandby gpaddmirrors gpcheckcat gpcheckperf \
 	gpcheckresgroupimpl gpconfig gpdeletesystem gpexpand gpshrink gpinitstandby \
 	gpinitsystem gpload gpload.py gplogfilter gpmovemirrors \
-	gppkg gprecoverseg gpreload gpscp gpsd gpssh gpssh-exkeys gpstart \
+	gppkg gprecoverseg gpreload gpsync gpsd gpssh gpssh-exkeys gpstart \
 	gpstate gpstop minirepro gpmemwatcher gpmemreport gpdemo gpdirtableload
 
-GPDEMO_LIBS = gpdemo-defaults.sh lalshell generate_certs.sh demo_cluster.sh \
-				probe_config.sh README
+	GPDEMO_LIBS = gpdemo-defaults.sh lalshell generate_certs.sh demo_cluster.sh \
+					probe_config.sh README
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(bindir)/lib'
@@ -115,7 +115,7 @@ pyyaml:
 	@echo "--- pyyaml"
 	cd $(PYLIB_SRC_EXT)/ && $(TAR) xzf $(PYYAML_DIR).tar.gz
 	cd $(PYLIB_SRC_EXT)/$(PYYAML_DIR)/ && env -u CC python3 setup.py build
-	cp -r $(PYLIB_SRC_EXT)/$(PYYAML_DIR)/build/lib*-3*/* $(PYLIB_DIR)
+	cp -r $(PYLIB_SRC_EXT)/$(PYYAML_DIR)/build/lib*-3.*/* $(PYLIB_DIR)
 
 #
 # PYLINT
@@ -195,6 +195,6 @@ clean distclean:
 	rm -f analyzedbc gpactivatestandbyc gpaddmirrorsc gpcheckcatc \
 		  gpcheckperfc gpcheckresgroupimplc gpchecksubnetcfgc gpconfigc \
 		  gpdeletesystemc gpexpandc gpshrinkc gpinitstandbyc gplogfilterc gpmovemirrorsc \
-		  gppkgc gprecoversegc gpreloadc gpscpc gpsdc gpssh-exkeysc gpsshc \
+		  gppkgc gprecoversegc gpreloadc gpscpc gpsyncc gpsdc gpssh-exkeysc gpsshc \
 		  gpstartc gpstatec gpstopc minireproc
 	rm -f gpconfig_modules/gucs_disallowed_in_file.txt
