@@ -13,39 +13,25 @@ jobs:
           fetch-depth: 0
       - name: Environment Setup
         run: |
-          # sudo ln -sf /opt/rh/rh-git218/root/usr/bin/git /usr/bin/git
-          whoami
           pushd $GITHUB_WORKSPACE
           pushd deploy/build
-          # source README.CentOS.bash
           sudo bash README.CentOS.bash
           popd
-          sudo yum -y install R apr apr-devel apr-util automake zip zlib \
-                      autoconf bash bison bison-devel bzip2 bzip2-devel \
-                      centos-release-scl curl flex flex-devel gcc gcc-c++ \
-                      git gdb iproute krb5-devel less libcurl libcurl-devel \
-                      libevent libevent-devel libxml2 libxml2-devel libyaml \
-                      libzstd-devel libzstd make openldap openssh  vim wget \
-                      openssh-server openssl openssl-devel openssl-libs perl \
-                      python3-devel readline readline-devel rsync sed sudo tar \
-                      which xerces-c-devel openssh-clients cmake3 scl-utils
+
+          sudo yum install -y  unzip bash bison-devel bzip2 \
+                               flex-devel  less  libevent \
+                               perl  rsync sed sudo tar which openssh-clients \
+                               scl-utils curl
+          # sudo yum -y remove   automake zip autoconf  gdb iproute libcurl libxml2 libyaml \
+          #                     libzstd make openssl-libs libzstd openldap readline
+
           sudo yum -y install epel-release centos-release-scl devtoolset-10-gcc \
                       devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
-          # source scl_source enable devtoolset-10
-          echo 1111111
-          # rm -rf /usr/bin/gcc
-          echo 22222222
-          # sudo ln -sf /usr/bin/cmake3 /usr/local/bin/cmake
-          # sudo ln -sf /opt/rh/devtoolset-10/root/usr/bin/gcc /usr/bin/gcc
-          echo 33333333
-          sudo chmod 777 /etc/ld.so.conf
-          echo 44444444
+
           echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
-          echo 55555555
           sudo ldconfig
-          echo 66666666
-          echo "Environment setup completed ！！！"
-          gcc -v
+          echo "Environment setup completed ！！！" && gcc -v
+
       - name: Get New Tag
         id: set_value
         env:
@@ -68,10 +54,8 @@ jobs:
           git tag
       - name: Build RPM Package
         run: |
-          gcc -v
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
           make -j16 && make install
-          which ruby
           pwd && ruby -v
           source ~/.bashrc
           fpm --version
