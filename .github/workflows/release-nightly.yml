@@ -18,15 +18,10 @@ jobs:
           sudo bash README.CentOS.bash
           popd
 
-          sudo yum install -y  unzip bash bison-devel bzip2 \
-                               flex-devel  less  libevent \
-                               perl  rsync sed sudo tar which openssh-clients \
-                               scl-utils curl
-          # sudo yum -y remove   automake zip autoconf  gdb iproute libcurl libxml2 libyaml \
-          #                     libzstd make openssl-libs libzstd openldap readline
-
+          sudo yum -y install unzip bash bison-devel bzip2 flex-devel  less  libevent \
+                              perl  rsync sed sudo tar which openssh-clients scl-utils curl
           sudo yum -y install epel-release centos-release-scl devtoolset-10-gcc \
-                      devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
+                              devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
 
           echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
           sudo ldconfig
@@ -50,8 +45,8 @@ jobs:
           echo "The new tag is $new_tag"
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
-          sudo git tag $new_tag
-          git tag
+          sudo git tag $new_tag && git tag
+
       - name: Build RPM Package
         run: |
           ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
@@ -64,10 +59,7 @@ jobs:
           cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
           fpm -s dir -t rpm -n cloudberrydb -v ${{ steps.set_value.outputs.MAIN_VERSION }} -p ./ -C tmp
           cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.x86_64.rpm /tmp/release
-      - name: DEBUG
-        run: |
-          echo "${{ steps.set_value.outputs.NEW_TAG }}"
-          echo "${{ steps.set_value.outputs.MAIN_VERSION }}"
+
       - name: Release
         uses: softprops/action-gh-release@v1
         with:
