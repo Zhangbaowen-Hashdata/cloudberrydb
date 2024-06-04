@@ -32,7 +32,6 @@ jobs:
 
           sudo ldconfig
           echo "Environment setup completed !!!" && gcc -v
-          source ~/.bashrc
 
       - name: Get New Tag
         id: set_value
@@ -65,6 +64,7 @@ jobs:
           make -j16 && make install
 
           echo "Build RPM Package"
+          source ~/.bashrc
           mkdir -p tmp/usr/local/cloudberrydb
           cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
           fpm -s dir -t rpm -n cloudberrydb -v \
