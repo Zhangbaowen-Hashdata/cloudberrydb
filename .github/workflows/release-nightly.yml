@@ -1,6 +1,5 @@
-name: Build and Release RPM Nightly
+name: Build and Release RPM Weeklyly
 on:
-  push:
   schedule:
     - cron: '0 16 * * 1'
 jobs:
@@ -9,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: test-release-nightly
+          ref: test-release-weekly
           fetch-depth: 0
       - name: Environment Setup
         run: |
@@ -18,22 +17,19 @@ jobs:
           sudo bash README.CentOS.bash
           popd
           sudo yum -y install bash bison-devel bzip2 curl flex-devel less \
-               libevent openssh-clients perl rsync scl-utils sed sudo tar \
+               libevent openssh-clients perl rsync scl-utils sed tar \
                unzip which
 
           sudo yum -y install epel-release centos-release-scl \
                devtoolset-10-gcc devtoolset-10-gcc-c++ devtoolset-10 \
                devtoolset-10-binutils
 
-          echo -e "/usr/local/lib \n\
-              /usr/local/lib64 \n\
-              /usr/lib \n\
-              /usr/lib64" >> /etc/ld.so.conf
-
+          echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
+          echo -e "/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
           sudo ldconfig
           echo "Environment setup completed !!!" && gcc -v
 
-      - name: Get New Tag
+      - name: Get LATEST Tag
         id: set_value
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -44,18 +40,18 @@ jobs:
           timestamp=$(date +"%Y%m%d")
           rm -rf /tmp/release && mkdir /tmp/release
 
-          old_tag=$(git tag | sort -V -r | head -n 1)
-          main_version=$(echo $old_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
-          new_tag="$main_version-$timestamp-nightly"
+          current_tag=$(git tag | sort -V -r | head -n 1)
+          main_version=$(echo $current_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
+          latest_tag="$main_version-$timestamp-weekly"
 
-          echo "The old tag that already exists is $old_tag"
+          echo "The current tag that already exists is $current_tag"
           echo "The main version is $main_version"
-          echo "The new tag is $new_tag"
+          echo "The latest tag is $latest_tag"
 
-          echo "::set-output name=NEW_TAG::${new_tag}"
+          echo "::set-output name=LATEST_TAG::${latest_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
-          sudo git tag $new_tag && git tag
+          sudo git tag $latest_tag && git tag
 
       - name: Build RPM Package
         run: |
@@ -76,8 +72,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: "/tmp/release/*.rpm"
-          name: v${{ steps.set_value.outputs.NEW_TAG }}
-          tag_name: "${{ steps.set_value.outputs.NEW_TAG }}"
+          name: v${{ steps.set_value.outputs.LATEST_TAG }}
+          tag_name: "${{ steps.set_value.outputs.LATEST_TAG }}"
           prerelease: true
           generate_release_notes: true
         env:
