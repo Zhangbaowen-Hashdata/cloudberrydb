@@ -17,15 +17,22 @@ jobs:
           pushd deploy/build
           sudo bash README.CentOS.bash
           popd
-          sudo yum -y install unzip bash bison-devel bzip2 flex-devel less curl \
-               libevent perl rsync sed sudo tar which openssh-clients scl-utils
-          sudo yum -y install epel-release centos-release-scl devtoolset-10-gcc \
-               devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
+          sudo yum -y install bash bison-devel bzip2 curl flex-devel less \
+               libevent openssh-clients perl rsync scl-utils sed sudo tar \
+               unzip which
 
-          echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> \
-               /etc/ld.so.conf
+          sudo yum -y install epel-release centos-release-scl \
+               devtoolset-10-gcc devtoolset-10-gcc-c++ devtoolset-10 \
+               devtoolset-10-binutils
+
+          echo -e "/usr/local/lib \n\
+              /usr/local/lib64 \n\
+              /usr/lib \n\
+              /usr/lib64" >> /etc/ld.so.conf
+
           sudo ldconfig
           echo "Environment setup completed !!!" && gcc -v
+          source ~/.bashrc
 
       - name: Get New Tag
         id: set_value
@@ -34,17 +41,21 @@ jobs:
         run: |
           git tag -d $(git tag)
           git fetch --tags
-          echo "The workspace is $GITHUB_WORKSPACE"
+
           timestamp=$(date +"%Y%m%d")
           rm -rf /tmp/release && mkdir /tmp/release
+
           old_tag=$(git tag | sort -V -r | head -n 1)
           main_version=$(echo $old_tag | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
           new_tag="$main_version-$timestamp-nightly"
+
           echo "The old tag that already exists is $old_tag"
           echo "The main version is $main_version"
           echo "The new tag is $new_tag"
+
           echo "::set-output name=NEW_TAG::${new_tag}"
           echo "::set-output name=MAIN_VERSION::${main_version}"
+
           sudo git tag $new_tag && git tag
 
       - name: Build RPM Package
@@ -52,9 +63,7 @@ jobs:
           ./configure --with-perl --with-python --with-libxml --with-gssapi \
                       --prefix=/home/gpadmin/cbdb-install
           make -j16 && make install
-          pwd && ruby -v
-          source ~/.bashrc
-          fpm --version
+
           echo "Build RPM Package"
           mkdir -p tmp/usr/local/cloudberrydb
           cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
