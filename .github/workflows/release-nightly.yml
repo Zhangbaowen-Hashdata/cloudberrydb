@@ -1,11 +1,10 @@
 name: Build and Release RPM Nightly
 on:
-  push:
   schedule:
-    - cron: '* 16 * * *'
+    - cron: '0 16 * * 1'
 jobs:
   Build-rpm:
-    runs-on: label-7
+    runs-on: cbdb-weekly
     steps:
       - uses: actions/checkout@v3
         with:
@@ -17,15 +16,15 @@ jobs:
           pushd deploy/build
           sudo bash README.CentOS.bash
           popd
-
-          sudo yum -y install unzip bash bison-devel bzip2 flex-devel  less  libevent \
-                              perl  rsync sed sudo tar which openssh-clients scl-utils curl
+          sudo yum -y install unzip bash bison-devel bzip2 flex-devel less curl \
+               libevent perl rsync sed sudo tar which openssh-clients scl-utils
           sudo yum -y install epel-release centos-release-scl devtoolset-10-gcc \
-                              devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
+               devtoolset-10-gcc-c++ devtoolset-10-binutils devtoolset-10
 
-          echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
+          echo -e "/usr/local/lib \n/usr/local/lib64 \n/usr/lib \n/usr/lib64" >> \
+               /etc/ld.so.conf
           sudo ldconfig
-          echo "Environment setup completed ！！！" && gcc -v
+          echo "Environment setup completed !!!" && gcc -v
 
       - name: Get New Tag
         id: set_value
@@ -49,16 +48,19 @@ jobs:
 
       - name: Build RPM Package
         run: |
-          ./configure --with-perl --with-python --with-libxml --with-gssapi --prefix=/home/gpadmin/cbdb-install
+          ./configure --with-perl --with-python --with-libxml --with-gssapi \
+                      --prefix=/home/gpadmin/cbdb-install
           make -j16 && make install
           pwd && ruby -v
           source ~/.bashrc
           fpm --version
-          echo "build rpm package"
+          echo "Build RPM Package"
           mkdir -p tmp/usr/local/cloudberrydb
           cp -a /home/gpadmin/cbdb-install/* tmp/usr/local/cloudberrydb
-          fpm -s dir -t rpm -n cloudberrydb -v ${{ steps.set_value.outputs.MAIN_VERSION }} -p ./ -C tmp
-          cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.x86_64.rpm /tmp/release
+          fpm -s dir -t rpm -n cloudberrydb -v \
+              ${{ steps.set_value.outputs.MAIN_VERSION }} -p ./ -C tmp
+          cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.x86_64.rpm \
+             /tmp/release
 
       - name: Release
         uses: softprops/action-gh-release@v1
