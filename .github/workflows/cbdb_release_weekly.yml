@@ -1,6 +1,6 @@
 name: Build and Release RPM Weekly
 on:
-  push;
+  push:
   schedule:
     - cron: '0 16 * * 1'
 jobs:
