@@ -19,13 +19,13 @@ jobs:
           popd
           sudo yum -y install scl-utils centos-release-scl devtoolset-10
           # source scl_source enable devtoolset-10
-          sudo echo 'source scl_source enable devtoolset-10' >> /root/.bashrc
+          # sudo echo 'source scl_source enable devtoolset-10' >> /root/.bashrc
           echo "222222"
-          sudo echo 'source scl_source enable devtoolset-10' >> /home/gpadmin/.bashrc
+          # sudo echo 'source scl_source enable devtoolset-10' >> /home/gpadmin/.bashrc
           echo "333333"
-          sudo echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
+          # sudo echo -e "/usr/local/lib \n/usr/local/lib64" >> /etc/ld.so.conf
           echo "444444"
-          sudo echo -e "/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
+          # sudo echo -e "/usr/lib \n/usr/lib64" >> /etc/ld.so.conf
           echo "555555"
           sudo ldconfig
           echo "666666"
