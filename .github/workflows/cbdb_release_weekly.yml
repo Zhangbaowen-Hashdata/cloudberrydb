@@ -54,7 +54,10 @@ jobs:
           echo "::set-output name=MAIN_VERSION::${main_version}"
 
           sudo git tag $latest_tag && git tag
-
+      - name: DEBUG
+        run: |
+          curl -H "Accept: application/vnd.github+json" \
+               -H "Authorization: Bearer ${{ secrets.RELEASE_NIGHTLY }}" https://api.github.com/repos/${{ github.repository_owner }}/${{ github.repository_name }}/pulls
       - name: Build RPM Package
         run: |
           ./configure --with-perl --with-python --with-libxml --with-gssapi \
