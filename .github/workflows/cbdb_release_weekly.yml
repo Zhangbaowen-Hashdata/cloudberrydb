@@ -102,8 +102,12 @@ jobs:
               -d 'centos-release-scl' \
               -d 'postgresql' \
               -d 'postgresql-devel'
-          cp cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.el7.x86_64.rpm \
-             /tmp/release
+
+          rpm_files=cloudberrydb-${{ steps.set_value.outputs.MAIN_VERSION }}-1.el7.x86_64.rpm
+          timestamp=$(date +"%Y%m%d%H%M%S")
+          new_filename="${rpm_files%.*}-$timestamp.rpm"
+          mv "$rpm_files" "$new_filename"
+          cp $new_filename /tmp/release
 
       - name: Release
         uses: softprops/action-gh-release@v1
