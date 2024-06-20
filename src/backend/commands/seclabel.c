@@ -41,6 +41,7 @@ SecLabelSupportsObjectType(ObjectType objtype)
 		case OBJECT_AGGREGATE:
 		case OBJECT_COLUMN:
 		case OBJECT_DATABASE:
+		case OBJECT_DIRECTORY_TABLE:
 		case OBJECT_DOMAIN:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_FOREIGN_TABLE:
@@ -59,6 +60,7 @@ SecLabelSupportsObjectType(ObjectType objtype)
 		case OBJECT_TABLESPACE:
 		case OBJECT_TYPE:
 		case OBJECT_VIEW:
+		case OBJECT_PROFILE:
 			return true;
 
 		case OBJECT_ACCESS_METHOD:
@@ -94,6 +96,8 @@ SecLabelSupportsObjectType(ObjectType objtype)
 		case OBJECT_EXTPROTOCOL:
 		case OBJECT_RESQUEUE:
 		case OBJECT_RESGROUP:
+		case OBJECT_STORAGE_SERVER:
+		case OBJECT_STORAGE_USER_MAPPING:
 			return false;
 
 			/*
@@ -189,6 +193,7 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 				relation->rd_rel->relkind != RELKIND_MATVIEW &&
 				relation->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
 				relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
+				relation->rd_rel->relkind != RELKIND_DIRECTORY_TABLE &&
 				relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),

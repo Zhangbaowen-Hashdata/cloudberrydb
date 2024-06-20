@@ -173,7 +173,9 @@ _equalIntoClause(const IntoClause *a, const IntoClause *b)
 	COMPARE_NODE_FIELD(viewQuery);
 	COMPARE_SCALAR_FIELD(skipData);
 	COMPARE_NODE_FIELD(distributedBy);
-
+	COMPARE_SCALAR_FIELD(ivm);
+	COMPARE_SCALAR_FIELD(matviewOid);
+	COMPARE_STRING_FIELD(enrname);
 	return true;
 }
 
@@ -1357,6 +1359,7 @@ _equalCopyStmt(const CopyStmt *a, const CopyStmt *b)
 	COMPARE_SCALAR_FIELD(is_from);
 	COMPARE_SCALAR_FIELD(is_program);
 	COMPARE_STRING_FIELD(filename);
+	COMPARE_STRING_FIELD(dirfilename);
 	COMPARE_NODE_FIELD(options);
 	COMPARE_NODE_FIELD(whereClause);
 	COMPARE_NODE_FIELD(sreh);
@@ -2029,6 +2032,7 @@ _equalCreateTableSpaceStmt(const CreateTableSpaceStmt *a, const CreateTableSpace
 	COMPARE_NODE_FIELD(owner);
 	COMPARE_STRING_FIELD(location);
 	COMPARE_NODE_FIELD(options);
+	COMPARE_STRING_FIELD(filehandler);
 
 	return true;
 }
@@ -2143,6 +2147,34 @@ _equalAlterForeignServerStmt(const AlterForeignServerStmt *a, const AlterForeign
 }
 
 static bool
+_equalCreateStorageServerStmt(const CreateStorageServerStmt *a, const CreateStorageServerStmt *b)
+{
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_SCALAR_FIELD(if_not_exists);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalAlterStorageServerStmt(const AlterStorageServerStmt *a, const AlterStorageServerStmt *b)
+{
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalDropStorageServerStmt(const DropStorageServerStmt *a, const DropStorageServerStmt *b)
+{
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_SCALAR_FIELD(missing_ok);
+
+	return true;
+}
+
+static bool
 _equalCreateUserMappingStmt(const CreateUserMappingStmt *a, const CreateUserMappingStmt *b)
 {
 	COMPARE_NODE_FIELD(user);
@@ -2165,6 +2197,37 @@ _equalAlterUserMappingStmt(const AlterUserMappingStmt *a, const AlterUserMapping
 
 static bool
 _equalDropUserMappingStmt(const DropUserMappingStmt *a, const DropUserMappingStmt *b)
+{
+	COMPARE_NODE_FIELD(user);
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_SCALAR_FIELD(missing_ok);
+
+	return true;
+}
+
+static bool
+_equalCreateStorageUserMappingStmt(const CreateStorageUserMappingStmt *a, const CreateStorageUserMappingStmt *b)
+{
+	COMPARE_NODE_FIELD(user);
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_SCALAR_FIELD(if_not_exists);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalAlterStorageUserMappingStmt(const AlterStorageUserMappingStmt *a, const AlterStorageUserMappingStmt *b)
+{
+	COMPARE_NODE_FIELD(user);
+	COMPARE_STRING_FIELD(servername);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
+_equalDropStorageUserMappingStmt(const DropStorageUserMappingStmt *a, const DropStorageUserMappingStmt *b)
 {
 	COMPARE_NODE_FIELD(user);
 	COMPARE_STRING_FIELD(servername);
@@ -2239,6 +2302,7 @@ _equalCreateTrigStmt(const CreateTrigStmt *a, const CreateTrigStmt *b)
 	COMPARE_SCALAR_FIELD(deferrable);
 	COMPARE_SCALAR_FIELD(initdeferred);
 	COMPARE_NODE_FIELD(constrrel);
+	COMPARE_SCALAR_FIELD(matviewId);
 
 	return true;
 }
@@ -2287,6 +2351,15 @@ _equalCreateRoleStmt(const CreateRoleStmt *a, const CreateRoleStmt *b)
 }
 
 static bool
+_equalCreateProfileStmt(const CreateProfileStmt *a, const CreateProfileStmt *b)
+{
+	COMPARE_STRING_FIELD(profile_name);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
 _equalDenyLoginInterval(const DenyLoginInterval *a, const DenyLoginInterval *b)
 {
 	COMPARE_NODE_FIELD(start);
@@ -2325,9 +2398,27 @@ _equalAlterRoleSetStmt(const AlterRoleSetStmt *a, const AlterRoleSetStmt *b)
 }
 
 static bool
+_equalAlterProfileStmt(const AlterProfileStmt *a, const AlterProfileStmt *b)
+{
+	COMPARE_STRING_FIELD(profile_name);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
 _equalDropRoleStmt(const DropRoleStmt *a, const DropRoleStmt *b)
 {
 	COMPARE_NODE_FIELD(roles);
+	COMPARE_SCALAR_FIELD(missing_ok);
+
+	return true;
+}
+
+static bool
+_equalDropProfileStmt(const DropProfileStmt *a, const DropProfileStmt *b)
+{
+	COMPARE_NODE_FIELD(profiles);
 	COMPARE_SCALAR_FIELD(missing_ok);
 
 	return true;
@@ -2981,6 +3072,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_SCALAR_FIELD(relkind);
 	COMPARE_SCALAR_FIELD(rellockmode);
 	COMPARE_NODE_FIELD(tablesample);
+	COMPARE_SCALAR_FIELD(relisivm);
 	COMPARE_NODE_FIELD(subquery);
 	COMPARE_SCALAR_FIELD(security_barrier);
 	COMPARE_SCALAR_FIELD(jointype);
@@ -3299,6 +3391,17 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	COMPARE_NODE_FIELD(name);
 	COMPARE_NODE_FIELD(bound);
 	COMPARE_SCALAR_FIELD(concurrent);
+
+	return true;
+}
+
+static bool
+_equalCreateDirectoryTableStmt(const CreateDirectoryTableStmt *a, const CreateDirectoryTableStmt *b)
+{
+	if (!_equalCreateStmt(&a->base, &b->base))
+		return false;
+
+	COMPARE_STRING_FIELD(tablespacename);
 
 	return true;
 }
@@ -3903,6 +4006,15 @@ equal(const void *a, const void *b)
 		case T_AlterForeignServerStmt:
 			retval = _equalAlterForeignServerStmt(a, b);
 			break;
+		case T_CreateStorageServerStmt:
+			retval = _equalCreateStorageServerStmt(a, b);
+			break;
+		case T_AlterStorageServerStmt:
+			retval = _equalAlterStorageServerStmt(a, b);
+			break;
+		case T_DropStorageServerStmt:
+			retval = _equalDropStorageServerStmt(a, b);
+			break;
 		case T_CreateUserMappingStmt:
 			retval = _equalCreateUserMappingStmt(a, b);
 			break;
@@ -3911,6 +4023,15 @@ equal(const void *a, const void *b)
 			break;
 		case T_DropUserMappingStmt:
 			retval = _equalDropUserMappingStmt(a, b);
+			break;
+		case T_CreateStorageUserMappingStmt:
+			retval = _equalCreateStorageUserMappingStmt(a, b);
+			break;
+		case T_AlterStorageUserMappingStmt:
+			retval = _equalAlterStorageUserMappingStmt(a, b);
+			break;
+		case T_DropStorageUserMappingStmt:
+			retval = _equalDropStorageUserMappingStmt(a, b);
 			break;
 		case T_CreateForeignTableStmt:
 			retval = _equalCreateForeignTableStmt(a, b);
@@ -3947,6 +4068,15 @@ equal(const void *a, const void *b)
 			break;
 		case T_DropRoleStmt:
 			retval = _equalDropRoleStmt(a, b);
+			break;
+		case T_CreateProfileStmt:
+			retval = _equalCreateProfileStmt(a, b);
+			break;
+		case T_AlterProfileStmt:
+			retval = _equalAlterProfileStmt(a, b);
+			break;
+		case T_DropProfileStmt:
+			retval = _equalDropProfileStmt(a, b);
 			break;
 		case T_LockStmt:
 			retval = _equalLockStmt(a, b);
@@ -4208,6 +4338,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_DistributionKeyElem:
 			retval = _equalDistributionKeyElem(a, b);
+			break;
+		case T_CreateDirectoryTableStmt:
+			retval = _equalCreateDirectoryTableStmt(a, b);
 			break;
 
 		default:

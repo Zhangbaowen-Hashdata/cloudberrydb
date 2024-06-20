@@ -58,7 +58,9 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_password_history.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_profile.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_shseclabel.h"
@@ -128,6 +130,8 @@ static const FormData_pg_attribute Desc_pg_authid[Natts_pg_authid] = {Schema_pg_
 static const FormData_pg_attribute Desc_pg_auth_members[Natts_pg_auth_members] = {Schema_pg_auth_members};
 static const FormData_pg_attribute Desc_pg_auth_time_constraint_members[Natts_pg_auth_time_constraint] = {Schema_pg_auth_time_constraint};
 static const FormData_pg_attribute Desc_pg_index[Natts_pg_index] = {Schema_pg_index};
+static const FormData_pg_attribute Desc_pg_password_history[Natts_pg_password_history] = {Schema_pg_password_history};
+static const FormData_pg_attribute Desc_pg_profile[Natts_pg_profile] = {Schema_pg_profile};
 static const FormData_pg_attribute Desc_pg_shseclabel[Natts_pg_shseclabel] = {Schema_pg_shseclabel};
 static const FormData_pg_attribute Desc_pg_subscription[Natts_pg_subscription] = {Schema_pg_subscription};
 
@@ -476,7 +480,7 @@ static void
 RelationParseRelOptions(Relation relation, HeapTuple tuple)
 {
 	bytea	   *options;
-	amoptions_function amoptsfn;
+	reloption_function amoptsfn;
 
 	relation->rd_options = NULL;
 
@@ -488,11 +492,13 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 	{
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
 		case RELKIND_AOSEGMENTS:
 		case RELKIND_AOBLOCKDIR:
 		case RELKIND_AOVISIMAP:
+			amoptsfn = relation->rd_tableam->amoptions;
+			break;
 		case RELKIND_VIEW:
-		case RELKIND_MATVIEW:
 		case RELKIND_PARTITIONED_TABLE:
 			amoptsfn = NULL;
 			break;
@@ -1232,6 +1238,7 @@ retry:
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
+		case RELKIND_DIRECTORY_TABLE:
 			Assert(relation->rd_rel->relam != InvalidOid);
 			RelationInitTableAccessMethod(relation);
 			break;
@@ -1275,7 +1282,8 @@ retry:
 	if ((relation->rd_rel->relkind == RELKIND_RELATION && !IsSystemRelation(relation)) ||
 		relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ||
 		relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
-		relation->rd_rel->relkind == RELKIND_MATVIEW)
+		relation->rd_rel->relkind == RELKIND_MATVIEW ||
+		relation->rd_rel->relkind == RELKIND_DIRECTORY_TABLE)
 	{
 		/*
 		 * There are many memory allocations in GpPolicyFetch(), especially 
@@ -1967,6 +1975,8 @@ formrdesc(const char *relationName, Oid relationReltype,
 
 	/* ... and they're always populated, too */
 	relation->rd_rel->relispopulated = true;
+	/* ... and they're always no ivm, too */
+	relation->rd_rel->relisivm = false;
 
 	relation->rd_rel->relreplident = REPLICA_IDENTITY_NOTHING;
 	relation->rd_rel->relpages = 0;
@@ -3687,7 +3697,7 @@ RelationBuildLocalRelation(const char *relname,
 			rel->rd_islocaltemp = false;
 			break;
 		case RELPERSISTENCE_TEMP:
-			Assert(isTempOrTempToastNamespace(relnamespace));
+			Assert(relnamespace == PG_EXTAUX_NAMESPACE || isTempOrTempToastNamespace(relnamespace));
 			rel->rd_backend = BackendIdForTempRelations();
 			rel->rd_islocaltemp = true;
 			break;
@@ -3706,6 +3716,7 @@ RelationBuildLocalRelation(const char *relname,
 	if (!IsCatalogNamespace(relnamespace) &&
 		(relkind == RELKIND_RELATION ||
 		 relkind == RELKIND_MATVIEW ||
+		 relkind == RELKIND_DIRECTORY_TABLE ||
 		 relkind == RELKIND_PARTITIONED_TABLE))
 		rel->rd_rel->relreplident = REPLICA_IDENTITY_DEFAULT;
 	else
@@ -3777,6 +3788,7 @@ RelationBuildLocalRelation(const char *relname,
 	MemoryContextSwitchTo(oldcxt);
 
 	if (relkind == RELKIND_RELATION ||
+		relkind == RELKIND_DIRECTORY_TABLE ||
 		relkind == RELKIND_SEQUENCE ||
 		relkind == RELKIND_TOASTVALUE ||
 		relkind == RELKIND_MATVIEW)
@@ -3892,6 +3904,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
+		case RELKIND_DIRECTORY_TABLE:
 			table_relation_set_new_filenode(relation, &newrnode,
 											persistence,
 											&freezeXid, &minmulti);
@@ -4096,6 +4109,10 @@ RelationCacheInitializePhase2(void)
 				  Natts_pg_database, Desc_pg_database);
 		formrdesc("pg_authid", AuthIdRelation_Rowtype_Id, true,
 				  Natts_pg_authid, Desc_pg_authid);
+		formrdesc("pg_password_history", PasswordHistoryRelation_Rowtype_Id, true,
+	    			  Natts_pg_password_history, Desc_pg_password_history);
+		formrdesc("pg_profile", ProfileRelation_Rowtype_Id, true,
+	    			  Natts_pg_profile, Desc_pg_profile);
 		formrdesc("pg_auth_members", AuthMemRelation_Rowtype_Id, true,
 				  Natts_pg_auth_members, Desc_pg_auth_members);
 		formrdesc("pg_shseclabel", SharedSecLabelRelation_Rowtype_Id, true,
@@ -4105,7 +4122,7 @@ RelationCacheInitializePhase2(void)
 		formrdesc("pg_auth_time_constraint", AuthTimeConstraint_Rowtype_Id, true,
 				  Natts_pg_auth_time_constraint, Desc_pg_auth_time_constraint_members);
 
-#define NUM_CRITICAL_SHARED_RELS	6	/* fix if you change list above */
+#define NUM_CRITICAL_SHARED_RELS	8	/* fix if you change list above */
 	}
 
 	MemoryContextSwitchTo(oldcxt);
@@ -4249,6 +4266,12 @@ RelationCacheInitializePhase3(void)
 							AuthIdRelationId);
 		load_critical_index(AuthIdOidIndexId,
 							AuthIdRelationId);
+		load_critical_index(ProfilePrfnameIndexId,
+		      					ProfileRelationId);
+		load_critical_index(ProfileOidIndexId,
+				    			ProfileRelationId);
+		load_critical_index(ProfileVerifyFunctionIndexId,
+				    			ProfileRelationId);
 		load_critical_index(AuthMemMemRoleIndexId,
 							AuthMemRelationId);
 		load_critical_index(SharedSecLabelObjectIndexId,
@@ -4256,7 +4279,7 @@ RelationCacheInitializePhase3(void)
 		load_critical_index(AuthTimeConstraintAuthIdIndexId,
 							AuthTimeConstraintRelationId);
 
-#define NUM_CRITICAL_SHARED_INDEXES 7	/* fix if you change list above */
+#define NUM_CRITICAL_SHARED_INDEXES 10	/* fix if you change list above */
 
 		criticalSharedRelcachesBuilt = true;
 	}
@@ -4377,7 +4400,8 @@ RelationCacheInitializePhase3(void)
 			(relation->rd_rel->relkind == RELKIND_RELATION ||
 			 relation->rd_rel->relkind == RELKIND_SEQUENCE ||
 			 relation->rd_rel->relkind == RELKIND_TOASTVALUE ||
-			 relation->rd_rel->relkind == RELKIND_MATVIEW))
+			 relation->rd_rel->relkind == RELKIND_MATVIEW ||
+			 relation->rd_rel->relkind == RELKIND_DIRECTORY_TABLE))
 		{
 			RelationInitTableAccessMethod(relation);
 			Assert(relation->rd_tableam != NULL);
@@ -6307,6 +6331,7 @@ load_relcache_init_file(bool shared)
 
 			/* Load table AM data */
 			if (rel->rd_rel->relkind == RELKIND_RELATION ||
+				rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE ||
 				rel->rd_rel->relkind == RELKIND_SEQUENCE ||
 				rel->rd_rel->relkind == RELKIND_TOASTVALUE ||
 				rel->rd_rel->relkind == RELKIND_MATVIEW)

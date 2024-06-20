@@ -155,7 +155,7 @@ static void transformColumnType(CreateStmtContext *cxt, ColumnDef *column);
 static void setSchemaName(char *context_schema, char **stmt_schema_name);
 static void transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd);
 static List *transformPartitionRangeBounds(ParseState *pstate, List *blist,
-										   Relation parent);
+										   Relation parent, PartitionKey key);
 static void validateInfiniteBounds(ParseState *pstate, List *blist);
 
 static DistributedBy *getLikeDistributionPolicy(TableLikeClause *e);
@@ -1081,6 +1081,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	relation = relation_openrv(table_like_clause->relation, AccessShareLock);
 
 	if (relation->rd_rel->relkind != RELKIND_RELATION &&
+		relation->rd_rel->relkind != RELKIND_DIRECTORY_TABLE &&
 		relation->rd_rel->relkind != RELKIND_VIEW &&
 		relation->rd_rel->relkind != RELKIND_MATVIEW &&
 		relation->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
@@ -1088,7 +1089,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
+				 errmsg("\"%s\" is not a table, directory table, view, materialized view, composite type, or foreign table",
 						RelationGetRelationName(relation))));
 
 	cancel_parser_errposition_callback(&pcbstate);
@@ -3289,7 +3290,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		index->idxname = NULL;	/* DefineIndex will choose name */
 
 	index->relation = cxt->relation;
-	index->accessMethod = constraint->access_method ? constraint->access_method : DEFAULT_INDEX_TYPE;
+	index->accessMethod = constraint->access_method ? constraint->access_method : default_index_access_method;
 	index->options = constraint->options;
 	index->tableSpace = constraint->indexspace;
 	index->whereClause = constraint->where_clause;
@@ -3413,7 +3414,7 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		 * else dump and reload will produce a different index (breaking
 		 * pg_upgrade in particular).
 		 */
-		if (index_rel->rd_rel->relam != get_index_am_oid(DEFAULT_INDEX_TYPE, false))
+		if (!IsIndexAccessMethod(index_rel->rd_rel->relam, BTREE_AM_OID))
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("index \"%s\" is not a btree", index_name),
@@ -5127,7 +5128,7 @@ transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd)
 			Assert(RelationGetPartitionKey(parentRel) != NULL);
 			if (cmd->bound != NULL)
 				cxt->partbound = transformPartitionBound(cxt->pstate, parentRel,
-														 cmd->bound);
+														 RelationGetPartitionKey(parentRel), cmd->bound);
 			break;
 		case RELKIND_PARTITIONED_INDEX:
 
@@ -5169,11 +5170,10 @@ transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd)
  * Transform a partition bound specification
  */
 PartitionBoundSpec *
-transformPartitionBound(ParseState *pstate, Relation parent,
+transformPartitionBound(ParseState *pstate, Relation parent, PartitionKey key,
 						PartitionBoundSpec *spec)
 {
 	PartitionBoundSpec *result_spec;
-	PartitionKey key = RelationGetPartitionKey(parent);
 	char		strategy = get_partition_strategy(key);
 	int			partnatts = get_partition_natts(key);
 	List	   *partexprs = get_partition_exprs(key);
@@ -5306,10 +5306,10 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 		 */
 		result_spec->lowerdatums =
 			transformPartitionRangeBounds(pstate, spec->lowerdatums,
-										  parent);
+										  parent, key);
 		result_spec->upperdatums =
 			transformPartitionRangeBounds(pstate, spec->upperdatums,
-										  parent);
+										  parent, key);
 	}
 	else
 		elog(ERROR, "unexpected partition strategy: %d", (int) strategy);
@@ -5324,10 +5324,9 @@ transformPartitionBound(ParseState *pstate, Relation parent,
  */
 static List *
 transformPartitionRangeBounds(ParseState *pstate, List *blist,
-							  Relation parent)
+							  Relation parent, PartitionKey key)
 {
 	List	   *result = NIL;
-	PartitionKey key = RelationGetPartitionKey(parent);
 	List	   *partexprs = get_partition_exprs(key);
 	ListCell   *lc;
 	int			i,

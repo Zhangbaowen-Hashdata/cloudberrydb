@@ -128,6 +128,7 @@ pg_db_role_setting|t
 pg_default_acl|t
 pg_depend|t
 pg_description|t
+pg_directory_table|t
 pg_enum|t
 pg_event_trigger|t
 pg_extension|t
@@ -146,9 +147,11 @@ pg_opclass|t
 pg_operator|t
 pg_opfamily|t
 pg_partitioned_table|t
+pg_password_history|t
 pg_policy|t
 pg_proc|t
 pg_proc_callback|t
+pg_profile|t
 pg_publication|t
 pg_publication_rel|t
 pg_range|t

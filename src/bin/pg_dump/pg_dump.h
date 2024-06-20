@@ -383,6 +383,7 @@ typedef struct _tableInfo
 	char	   *partbound;		/* partition bound definition */
 	bool		needs_override; /* has GENERATED ALWAYS AS IDENTITY */
 	char	   *amname;			/* relation access method */
+	Oid			amoid;			/* relation access method oid */
 
 	/*
 	 * Stuff computed only for dumpable tables.
@@ -396,6 +397,7 @@ typedef struct _tableInfo
 	struct _tableDataInfo *dataObj; /* TableDataInfo, if dumping its data */
 	int			numTriggers;	/* number of triggers for table */
 	struct _triggerInfo *triggers;	/* array of TriggerInfo structs */
+	bool		isivm;		 	/* is incrementally maintainable materialized view? */
 } TableInfo;
 
 typedef struct _tableAttachInfo

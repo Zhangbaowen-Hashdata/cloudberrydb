@@ -62,4 +62,6 @@ extern Expr *preprocess_phv_expression(PlannerInfo *root, Expr *expr);
 
 extern bool optimizer_init;
 
+extern void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
+
 #endif							/* PLANNER_H */

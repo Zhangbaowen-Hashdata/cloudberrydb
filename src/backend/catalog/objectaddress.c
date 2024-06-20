@@ -22,6 +22,8 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/catalog.h"
+#include "catalog/gp_storage_server.h"
+#include "catalog/gp_storage_user_mapping.h"
 #include "catalog/objectaddress.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
@@ -47,6 +49,8 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_password_history.h"
+#include "catalog/pg_profile.h"
 #include "catalog/pg_policy.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
@@ -74,6 +78,7 @@
 #include "commands/proclang.h"
 #include "commands/queue.h"
 #include "commands/resgroupcmds.h"
+#include "commands/storagecmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
 #include "foreign/foreign.h"
@@ -296,6 +301,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		true
 	},
 	{
+		"storage server",
+		StorageServerRelationId,
+		StorageServerOidIndexId,
+		STORAGESERVEROID,
+		STORAGESERVERNAME,
+		Anum_gp_storage_server_oid,
+		Anum_gp_storage_server_srvname,
+		InvalidAttrNumber,
+		Anum_gp_storage_server_srvowner,
+		Anum_gp_storage_server_srvacl,
+		OBJECT_STORAGE_SERVER,
+		true
+	},
+	{
 		"function",
 		ProcedureRelationId,
 		ProcedureOidIndexId,
@@ -377,6 +396,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_opfamily_opfowner,
 		InvalidAttrNumber,
 		OBJECT_OPFAMILY,
+		true
+	},
+	{
+		"profile",
+		ProfileRelationId,
+		ProfileOidIndexId,
+		PROFILEID,
+		PROFILENAME,
+		Anum_pg_profile_oid,
+		Anum_pg_profile_prfname,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		OBJECT_PROFILE,
 		true
 	},
 	{
@@ -639,6 +672,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		OBJECT_USER_MAPPING,
 		false
 	},
+	{
+		"storage user mapping",
+		StorageUserMappingRelationId,
+		StorageUserMappingOidIndexId,
+		STORAGEUSERMAPPINGOID,
+		-1,
+		Anum_gp_storage_user_mapping_oid,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		OBJECT_STORAGE_USER_MAPPING,
+		false
+	},
 
 	/* GPDB additions */
 	{
@@ -879,6 +926,22 @@ static const struct object_type_map
 	/* OCLASS_STATISTIC_EXT */
 	{
 		"statistics object", OBJECT_STATISTIC_EXT
+	},
+	/* OCLASS_PROFILE */
+	{
+		"profile", OBJECT_PROFILE
+	},
+	/* OCLASS_DIRECTORY_TABLE */
+	{
+		"directory table", OBJECT_DIRECTORY_TABLE
+	},
+	/* OCLASS_STORAGE_SERVER */
+	{
+		"storage server", OBJECT_STORAGE_SERVER
+	},
+	/* OCLASS_STORAGE_USER_MAPPING */
+	{
+		"storage user mapping", OBJECT_STORAGE_USER_MAPPING
 	}
 };
 
@@ -994,6 +1057,7 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_VIEW:
 			case OBJECT_MATVIEW:
 			case OBJECT_FOREIGN_TABLE:
+			case OBJECT_DIRECTORY_TABLE:
 				address =
 					get_relation_by_qualified_name(objtype, castNode(List, object),
 												   &relation, lockmode,
@@ -1052,6 +1116,9 @@ get_object_address(ObjectType objtype, Node *object,
 			case OBJECT_SUBSCRIPTION:
 			case OBJECT_RESQUEUE:
 			case OBJECT_RESGROUP:
+			case OBJECT_PROFILE:
+			case OBJECT_STORAGE_SERVER:
+			case OBJECT_STORAGE_USER_MAPPING:
 				address = get_object_address_unqualified(objtype,
 														 (Value *) object, missing_ok);
 				break;
@@ -1371,6 +1438,16 @@ get_object_address_unqualified(ObjectType objtype,
 			address.objectId = get_resgroup_oid(name, missing_ok);
 			address.objectSubId = 0;
 			break;
+		case OBJECT_PROFILE:
+			address.classId = ProfileRelationId;
+			address.objectId = get_profile_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
+		case OBJECT_STORAGE_SERVER:
+			address.classId = StorageServerRelationId;
+			address.objectId = get_storage_server_oid(name, missing_ok);
+			address.objectSubId = 0;
+			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
 			/* placate compiler, which doesn't know elog won't return */
@@ -1425,6 +1502,13 @@ get_relation_by_qualified_name(ObjectType objtype, List *object,
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 						 errmsg("\"%s\" is not a table",
+								RelationGetRelationName(relation))));
+			break;
+		case OBJECT_DIRECTORY_TABLE:
+			if (relation->rd_rel->relkind != RELKIND_DIRECTORY_TABLE)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("\"%s\" is not a directory table",
 								RelationGetRelationName(relation))));
 			break;
 		case OBJECT_VIEW:
@@ -2263,6 +2347,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_DOMCONSTRAINT:
 		case OBJECT_CAST:
 		case OBJECT_USER_MAPPING:
+		case OBJECT_STORAGE_USER_MAPPING:
 		case OBJECT_PUBLICATION_REL:
 		case OBJECT_DEFACL:
 		case OBJECT_TRANSFORM:
@@ -2324,6 +2409,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_TABCONSTRAINT:
 		case OBJECT_OPCLASS:
 		case OBJECT_OPFAMILY:
+		case OBJECT_DIRECTORY_TABLE:
 			objnode = (Node *) name;
 			break;
 		case OBJECT_ACCESS_METHOD:
@@ -2332,6 +2418,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_EXTENSION:
 		case OBJECT_FDW:
 		case OBJECT_FOREIGN_SERVER:
+		case OBJECT_STORAGE_SERVER:
 		case OBJECT_LANGUAGE:
 		case OBJECT_PUBLICATION:
 		case OBJECT_ROLE:
@@ -2341,6 +2428,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_EXTPROTOCOL:
 		case OBJECT_RESGROUP:
 		case OBJECT_RESQUEUE:
+		case OBJECT_PROFILE:
 			if (list_length(name) != 1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -2360,6 +2448,9 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			objnode = (Node *) list_make2(name, linitial(args));
 			break;
 		case OBJECT_USER_MAPPING:
+			objnode = (Node *) list_make2(linitial(name), linitial(args));
+			break;
+		case OBJECT_STORAGE_USER_MAPPING:
 			objnode = (Node *) list_make2(linitial(name), linitial(args));
 			break;
 		case OBJECT_DEFACL:
@@ -2431,6 +2522,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 		case OBJECT_INDEX:
 		case OBJECT_SEQUENCE:
 		case OBJECT_TABLE:
+		case OBJECT_DIRECTORY_TABLE:
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
 		case OBJECT_FOREIGN_TABLE:
@@ -2517,6 +2609,11 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 			break;
 		case OBJECT_FOREIGN_SERVER:
 			if (!pg_foreign_server_ownercheck(address.objectId, roleid))
+				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
+							   strVal((Value *) object));
+			break;
+		case OBJECT_STORAGE_SERVER:
+			if (!gp_storage_server_ownercheck(address.objectId, roleid))
 				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
 							   strVal((Value *) object));
 			break;
@@ -2640,6 +2737,13 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 			if (!pg_statistics_object_ownercheck(address.objectId, roleid))
 				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
 							   NameListToString(castNode(List, object)));
+			break;
+		case OBJECT_PROFILE:
+			/* We treat these object types as being owned by superusers */
+			if (!superuser_arg(roleid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("must be superuser")));
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d",
@@ -4026,6 +4130,78 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				appendStringInfo(&buffer, _("task %s"), taskname);
 				break;
 			}
+
+		case OCLASS_PROFILE:
+			{
+				char	*profilename = ProfileGetNameByOid(object->objectId,
+												missing_ok);
+
+				if (profilename)
+					appendStringInfo(&buffer, _("profile %s"), profilename);
+				break;
+			}
+		case OCLASS_PASSWORDHISTORY:
+			{
+				char	*username = GetUserNameFromId(object->objectId,
+									     		missing_ok);
+
+				if (username)
+					appendStringInfo(&buffer, _("history password for role %s"), username);
+				break;
+			}
+
+		case OCLASS_STORAGE_SERVER:
+			{
+				StorageServer *srv;
+
+				srv = GetStorageServerExtended(object->objectId, missing_ok);
+				if (srv)
+					appendStringInfo(&buffer, _("storage server %s"), srv->servername);
+				break;
+			}
+
+		case OCLASS_STORAGE_USER_MAPPING:
+			{
+				HeapTuple	tup;
+				Oid			useid;
+				char	   *usename;
+				Form_gp_storage_user_mapping umform;
+				StorageServer *srv;
+
+				tup = SearchSysCache1(STORAGEUSERMAPPINGOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for storage user mapping %u",
+							 object->objectId);
+					break;
+				}
+
+				umform = (Form_gp_storage_user_mapping) GETSTRUCT(tup);
+				useid = umform->umuser;
+				srv = GetStorageServer(umform->umserver);
+
+				ReleaseSysCache(tup);
+
+				if (OidIsValid(useid))
+					usename = GetUserNameFromId(useid, false);
+				else
+					usename = "public";
+
+				appendStringInfo(&buffer, _("storage user mapping for %s on storage server %s"), usename,
+								 srv->servername);
+				break;
+			}
+
+		default:
+			{
+				struct CustomObjectClass *coc;
+
+				coc = find_custom_object_class_by_classid(object->classId, missing_ok);
+				if (coc && coc->object_desc)
+					coc->object_desc(coc, object, missing_ok, &buffer);
+			}
 	}
 
 	/* an empty buffer is equivalent to no object found */
@@ -4086,6 +4262,10 @@ getRelationDescription(StringInfo buffer, Oid relid, bool missing_ok)
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
 			appendStringInfo(buffer, _("table %s"),
+							 relname);
+			break;
+		case RELKIND_DIRECTORY_TABLE:
+			appendStringInfo(buffer, _("directory table %s"),
 							 relname);
 			break;
 		case RELKIND_INDEX:
@@ -4589,10 +4769,39 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 			appendStringInfoString(&buffer, "task");
 			break;
 
+		case OCLASS_PROFILE:
+			appendStringInfoString(&buffer, "profile");
+			break;
+
+		case OCLASS_PASSWORDHISTORY:
+			appendStringInfoString(&buffer, "password_history");
+			break;
+
+		case OCLASS_DIRTABLE:
+			appendStringInfoString(&buffer, "directory table");
+			break;
+
+		case OCLASS_STORAGE_SERVER:
+			appendStringInfoString(&buffer, "storage server");
+			break;
+
+		case OCLASS_STORAGE_USER_MAPPING:
+			appendStringInfoString(&buffer, "storage user mapping");
+			break;
+
+		default:
+		{
+			struct CustomObjectClass *coc;
+
+			coc = find_custom_object_class_by_classid(object->classId, false);
+			if (coc->object_type_desc)
+				coc->object_type_desc(coc, object, missing_ok, &buffer);
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
 			 */
+			break;
+		}
 	}
 
 	/* the result can never be empty */
@@ -4629,6 +4838,9 @@ getRelationTypeDescription(StringInfo buffer, Oid relid, int32 objectSubId,
 		case RELKIND_RELATION:
 		case RELKIND_PARTITIONED_TABLE:
 			appendStringInfoString(buffer, "table");
+			break;
+		case RELKIND_DIRECTORY_TABLE:
+			appendStringInfoString(buffer, "directory table");
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
@@ -5569,6 +5781,24 @@ getObjectIdentityParts(const ObjectAddress *object,
 				break;
 			}
 
+		case OCLASS_STORAGE_SERVER:
+			{
+				StorageServer *srv;
+
+				srv = GetStorageServerExtended(object->objectId,
+								   			   missing_ok);
+
+				if (srv)
+				{
+					appendStringInfoString(&buffer,
+										   quote_identifier(srv->servername));
+
+					if (objname)
+						*objname = list_make1(pstrdup(srv->servername));
+				}
+				break;
+			}
+
 		case OCLASS_USER_MAPPING:
 			{
 				HeapTuple	tup;
@@ -5606,6 +5836,46 @@ getObjectIdentityParts(const ObjectAddress *object,
 				appendStringInfo(&buffer, "%s on server %s",
 								 quote_identifier(usename),
 								 srv->servername);
+				break;
+			}
+
+		case OCLASS_STORAGE_USER_MAPPING:
+			{
+				HeapTuple 	tup;
+				Oid 		useid;
+				Form_gp_storage_user_mapping umform;
+				StorageServer *srv;
+				const char *usename;
+
+				tup = SearchSysCache1(STORAGEUSERMAPPINGOID,
+						  			  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for storage user mapping %u",
+		   					 object->objectId);
+					break;
+				}
+				umform = (Form_gp_storage_user_mapping) GETSTRUCT(tup);
+				useid = umform->umuser;
+				srv = GetStorageServer(umform->umserver);
+
+				ReleaseSysCache(tup);
+
+				if (OidIsValid(useid))
+					usename = GetUserNameFromId(useid, false);
+				else
+					usename = "public";
+
+				if (objname)
+				{
+					*objname = list_make1(pstrdup(usename));
+					*objargs = list_make1(pstrdup(srv->servername));
+				}
+
+				appendStringInfo(&buffer, "%s on storage server %s",
+					 			 quote_identifier(usename),
+					 			 srv->servername);
 				break;
 			}
 
@@ -5897,11 +6167,49 @@ getObjectIdentityParts(const ObjectAddress *object,
 				}
 			}
 			break;
+		
+		case OCLASS_PROFILE:
+			{
+				char	*prfname;
 
+				prfname = ProfileGetNameByOid(object->objectId, missing_ok);
+				if (!prfname)
+					break;
+				if (objname)
+					*objname = list_make1(prfname);
+				appendStringInfoString(&buffer,
+					       	quote_identifier(prfname));
+				break;
+			}
+
+		case OCLASS_PASSWORDHISTORY:
+			{
+				char	*username;
+
+				username = GetUserNameFromId(object->objectId, missing_ok);
+				if (!username)
+					break;
+				if (objname)
+					*objname = list_make1(username);
+				appendStringInfo(&buffer,
+					       	"history password for role %s: ", quote_identifier(username));
+
+				break;
+			}
+
+		default:
+		{
+			struct CustomObjectClass *coc;
+
+			coc = find_custom_object_class_by_classid(object->classId, false);
+			if (coc->object_identity_parts)
+				coc->object_identity_parts(coc, object, objname, objargs, missing_ok, &buffer);
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
 			 */
+			break;
+		}
 	}
 
 	if (!missing_ok)
@@ -6083,6 +6391,8 @@ get_relkind_objtype(char relkind)
 			return OBJECT_FOREIGN_TABLE;
 		case RELKIND_TOASTVALUE:
 			return OBJECT_TABLE;
+		case RELKIND_DIRECTORY_TABLE:
+			return OBJECT_DIRECTORY_TABLE;
 		default:
 			/* Per above, don't raise an error */
 			return OBJECT_TABLE;

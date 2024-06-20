@@ -33,6 +33,7 @@ OBJS = \
 	createas.o \
 	dbcommands.o \
 	define.o \
+	dirtablecmds.o \
 	discard.o \
 	dropcmds.o \
 	event_trigger.o \
@@ -63,7 +64,9 @@ OBJS = \
 	user.o \
 	vacuum.o \
 	variable.o \
-	view.o
+	view.o \
+	pg_profile.o \
+	storagecmds.o
 
 OBJS += analyzefuncs.o analyzeutils.o extprotocolcmds.o exttablecmds.o queue.o
 OBJS += resgroupcmds.o tablecmds_gp.o vacuum_ao.o taskcmds.o

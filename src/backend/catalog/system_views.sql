@@ -1,6 +1,7 @@
 /*
  * PostgreSQL System Views
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 2006-2010, Greenplum inc.
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -26,8 +27,14 @@ CREATE VIEW pg_roles AS
         rolcanlogin,
         rolreplication,
         rolconnlimit,
+        rolenableprofile,
+        pg_profile.prfname AS rolprofile,
+        rolaccountstatus,
+        rolfailedlogins,
         '********'::text as rolpassword,
         rolvaliduntil,
+        rollockdate,
+        rolpasswordexpire,
         rolbypassrls,
         setconfig as rolconfig,
         rolresqueue,
@@ -36,8 +43,9 @@ CREATE VIEW pg_roles AS
         rolcreaterexthttp,
         rolcreatewextgpfd,
         rolresgroup
-    FROM pg_authid LEFT JOIN pg_db_role_setting s
-    ON (pg_authid.oid = setrole AND setdatabase = 0);
+    FROM pg_profile, pg_authid LEFT JOIN pg_db_role_setting s
+    ON (pg_authid.oid = setrole AND setdatabase = 0)
+    WHERE pg_profile.oid = pg_authid.rolprofile;
 
 CREATE VIEW pg_shadow AS
     SELECT
@@ -765,6 +773,14 @@ CREATE VIEW pg_stat_sys_tables AS
     WHERE schemaname IN ('pg_catalog', 'information_schema') OR
           schemaname ~ '^pg_toast';
 
+-- In singlenode mode, the result of pg_stat_sys_tables will be messed up,
+-- since we don't have segments.
+-- We create a new view for single node mode.
+CREATE VIEW pg_stat_sys_tables_single_node AS
+    SELECT * FROM pg_stat_all_tables_internal
+    WHERE schemaname IN ('pg_catalog', 'information_schema') OR
+          schemaname ~ '^pg_toast';
+
 CREATE VIEW pg_stat_xact_sys_tables AS
     SELECT * FROM pg_stat_xact_all_tables
     WHERE schemaname IN ('pg_catalog', 'information_schema') OR
@@ -772,6 +788,14 @@ CREATE VIEW pg_stat_xact_sys_tables AS
 
 CREATE VIEW pg_stat_user_tables AS
     SELECT * FROM pg_stat_all_tables
+    WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND
+          schemaname !~ '^pg_toast';
+
+-- In singlenode mode, the result of pg_stat_user_tables will be messed up,
+-- since we don't have segments.
+-- We create a new view for single node mode.
+CREATE VIEW pg_stat_user_tables_single_node AS
+    SELECT * FROM pg_stat_all_tables_internal
     WHERE schemaname NOT IN ('pg_catalog', 'information_schema') AND
           schemaname !~ '^pg_toast';
 
@@ -933,6 +957,39 @@ CREATE VIEW pg_statio_user_sequences AS
  */
 CREATE VIEW pg_stat_activity AS
     SELECT
+            S.datid AS datid,
+            D.datname AS datname,
+            S.pid,
+            S.sess_id,
+            S.leader_pid,
+            S.usesysid,
+            U.rolname AS usename,
+            S.application_name,
+            S.client_addr,
+            S.client_hostname,
+            S.client_port,
+            S.backend_start,
+            S.xact_start,
+            S.query_start,
+            S.state_change,
+            S.wait_event_type,
+            S.wait_event,
+            S.state,
+            S.backend_xid,
+            s.backend_xmin,
+            S.query_id,
+            S.query,
+            S.backend_type,
+
+            S.rsgid,
+            S.rsgname
+    FROM pg_stat_get_activity(NULL) AS S
+        LEFT JOIN pg_database AS D ON (S.datid = D.oid)
+        LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);
+
+CREATE VIEW pg_stat_activity_extended AS
+    SELECT
+            S.warehouse_id,
             S.datid AS datid,
             D.datname AS datname,
             S.pid,
@@ -1677,6 +1734,8 @@ CREATE VIEW pg_user_mappings AS
         LEFT JOIN pg_authid A ON (A.oid = U.umuser);
 
 REVOKE ALL ON pg_user_mapping FROM public;
+
+REVOKE ALL ON gp_storage_user_mapping FROM public;
 
 CREATE VIEW pg_replication_origin_status AS
     SELECT *

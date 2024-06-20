@@ -58,6 +58,8 @@
 
 #include "catalog/gp_configuration_history.h"
 #include "catalog/gp_id.h"
+#include "catalog/gp_storage_server.h"
+#include "catalog/gp_storage_user_mapping.h"
 #include "catalog/gp_version_at_initdb.h"
 #include "catalog/gp_warehouse.h"
 #include "catalog/pg_event_trigger.h"
@@ -67,6 +69,8 @@
 #include "catalog/pg_resqueuecapability.h"
 #include "catalog/pg_resgroup.h"
 #include "catalog/pg_resgroupcapability.h"
+#include "catalog/pg_profile.h"
+#include "catalog/pg_password_history.h"
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_stat_last_operation.h"
 #include "catalog/pg_stat_last_shoperation.h"
@@ -80,6 +84,7 @@
 #endif
 
 static bool IsAoSegmentClass(Form_pg_class reltuple);
+static bool IsExtAuxClass(Form_pg_class reltuple);
 
 /*
  * Like relpath(), but gets the directory containing the data file
@@ -177,6 +182,7 @@ IsSystemClass(Oid relid, Form_pg_class reltuple)
 {
 	/* IsCatalogRelationOid is a bit faster, so test that first */
 	return (IsCatalogRelationOid(relid) || IsToastClass(reltuple) ||
+			IsExtAuxClass(reltuple) ||
 			IsAoSegmentClass(reltuple));
 }
 
@@ -283,6 +289,14 @@ IsAoSegmentClass(Form_pg_class reltuple)
 	return IsAoSegmentNamespace(relnamespace);
 }
 
+static bool
+IsExtAuxClass(Form_pg_class reltuple)
+{
+	Oid			relnamespace = reltuple->relnamespace;
+
+	return IsExtAuxNamespace(relnamespace);
+}
+
 /*
  * IsCatalogNamespace
  *		True iff namespace is pg_catalog.
@@ -328,6 +342,12 @@ bool
 IsAoSegmentNamespace(Oid namespaceId)
 {
 	return namespaceId == PG_AOSEGMENT_NAMESPACE;
+}
+
+bool
+IsExtAuxNamespace(Oid namespaceId)
+{
+	return namespaceId == PG_EXTAUX_NAMESPACE;
 }
 
 /*
@@ -419,7 +439,13 @@ IsSharedRelation(Oid relationId)
 #ifdef USE_INTERNAL_FTS
 		relationId == GpSegmentConfigRelationId ||
 #endif
-		relationId == AuthTimeConstraintRelationId)
+		relationId == AuthTimeConstraintRelationId ||
+
+		relationId == StorageUserMappingRelationId ||
+		relationId == StorageServerRelationId ||
+
+		relationId == ProfileRelationId ||
+		relationId == PasswordHistoryRelationId)
 		return true;
 
 	/* These are their indexes */
@@ -463,7 +489,17 @@ IsSharedRelation(Oid relationId)
 		relationId == GpSegmentConfigContentPreferred_roleWarehouseIndexId ||
 		relationId == GpSegmentConfigDbidWarehouseIndexId ||
 #endif
-		relationId == AuthTimeConstraintAuthIdIndexId)
+		relationId == AuthTimeConstraintAuthIdIndexId ||
+		relationId == AuthIdRolProfileIndexId ||
+		relationId == StorageUserMappingOidIndexId ||
+		relationId == StorageUserMappingServerIndexId ||
+		relationId == StorageServerOidIndexId ||
+		relationId == StorageServerNameIndexId ||
+		relationId == ProfilePrfnameIndexId ||
+		relationId == ProfileOidIndexId ||
+		relationId == ProfileVerifyFunctionIndexId ||
+		relationId == PasswordHistoryRolePasswordIndexId ||
+		relationId == PasswordHistoryRolePasswordsetatIndexId)
 	{
 		return true;
 	}
@@ -484,7 +520,9 @@ IsSharedRelation(Oid relationId)
 		relationId == PgSubscriptionToastTable ||
 		relationId == PgSubscriptionToastIndex ||
 		relationId == PgTablespaceToastTable ||
-		relationId == PgTablespaceToastIndex)
+		relationId == PgTablespaceToastIndex ||
+		relationId == PgPasswordHistoryToastTable ||
+		relationId == PgPasswordHistoryToastIndex)
 		return true;
 #ifdef USE_INTERNAL_FTS
 	/* GPDB added toast tables and their indexes */
@@ -494,6 +532,13 @@ IsSharedRelation(Oid relationId)
 		return true;
 	}
 #endif
+
+	/* GPDB added toast tables and toast indexes */
+	if (relationId == GpStorageUserMappingToastTable ||
+		relationId == GpStorageUserMappingToastIndex ||
+		relationId == GpStorageServerToastTable ||
+		relationId == GpStorageServerToastIndex)
+		return true;
 
 	/* GPDB added task tables and their indexes */
 	if (relationId == TaskRelationId ||

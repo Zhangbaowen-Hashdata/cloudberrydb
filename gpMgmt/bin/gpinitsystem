@@ -62,6 +62,7 @@ LOG_STATEMENT_TXT="#log_statement ="
 LISTEN_ADR_TXT="listen_addresses"
 CONTENT_ID_TXT="gp_contentid"
 DBID_TXT="gp_dbid"
+SINGLENODE_MODE_TXT="gp_internal_is_singlenode"
 INIT_STANDBY_PROG=$GPINITSTANDBY
 QE_MIRROR_ARRAY=""
 GP_PASSWD=gparray
@@ -89,6 +90,7 @@ declare -a FTS_HOST_MACHINE_LIST
 USE_EXTERNAL_FTS=0
 DEMO_CLUSTER_HOST="127.0.0.1"
 ETCD_EXIST="false"
+SINGLENODE_MODE="false"
 
 #******************************************************************************
 # DCA Specific Variables
@@ -138,16 +140,16 @@ USAGE () {
 		$ECHO "          Applies to coordinator and all segments."
 		$ECHO "      -B, <number> run this batch of create segment processes in parallel [default $BATCH_DEFAULT]"
 		$ECHO "      -c, gp_config_file [mandatory]"
-		$ECHO "          Supplies all Cloudberry configuration information required by this utility."
+		$ECHO "          Supplies all CloudberryDB configuration information required by this utility."
 		$ECHO "          Full description of all parameters contained within the example file"
 		$ECHO "          supplied with this distribution."
 		$ECHO "          Also see gpinitsystem_INSTRUCTIONS file for greater detail on"
 		$ECHO "          the operation and configuration of this script"
-		$ECHO "      -e, <password>, password to set for Cloudberry superuser in database [default $GP_PASSWD]"
+		$ECHO "      -e, <password>, password to set for CloudberryDB superuser in database [default $GP_PASSWD]"
 		$ECHO "      -S, standby_datadir [optional]"
 		$ECHO "      -h, gp_hostlist_file [optional]"
 		$ECHO "          Contains a list of all segment instance hostnames required to participate in"
-		$ECHO "          the new Cloudberry instance. Normally set in gp_config_file."
+		$ECHO "          the new CloudberryDB instance. Normally set in gp_config_file."
 		$ECHO "      -I, <input_configuration_file>"
 		$ECHO "          The full path and filename of an input configuration file, which defines the"
 		$ECHO "          Cloudberry Database members and segments using the QD_PRIMARY_ARRAY and"
@@ -158,7 +160,7 @@ USAGE () {
 		$ECHO "      -m, maximum number of connections for coordinator instance [default ${DEFAULT_QD_MAX_CONNECT}]"
 		$ECHO "      -n, <locale>, setting for locale to be set when database initialized [defaults to system locale]"
 		$ECHO "      -O, <output_configuration_file>"
-		$ECHO "          When used with the -O option, gpinitsystem does not create a new Cloudberry"
+		$ECHO "          When used with the -O option, gpinitsystem does not create a new CloudberryDB"
 		$ECHO "          Database cluster but instead writes the supplied cluster configuration"
 		$ECHO "          information to the specified output_configuration_file. This file defines"
 		$ECHO "          Cloudberry Database members and segments using the QD_PRIMARY_ARRAY and"
@@ -166,7 +168,7 @@ USAGE () {
 		$ECHO "          <input_configuration_file> to initialize a new cluster."
 		$ECHO "      -p, postgresql_conf_gp_additions [optional]"
 		$ECHO "          List of additional PostgreSQL parameters to be applied to each Coordinator/Segment"
-		$ECHO "          postgresql.conf file during Cloudberry database initialization."
+		$ECHO "          postgresql.conf file during Cloudberry Database initialization."
 		$ECHO "      -P, standby_port [optional]"
 		$ECHO "      -s, standby_hostname [optional]"
 		$ECHO "      -U, Use external FTS, default false"
@@ -266,7 +268,7 @@ CHK_PARAMS () {
 		    $CAT $CLUSTER_CONFIG|$GREP -v "^\s*\(#.*\)\?$" >> $LOG_FILE
 		    LOG_MSG "[INFO]:-Completed $CLUSTER_CONFIG dump to logfile"
 		    # Source the cluster configuration file
-		    LOG_MSG "[INFO]:-Reading Cloudberry configuration file $CLUSTER_CONFIG" 1
+		    LOG_MSG "[INFO]:-Reading CloudberryDB configuration file $CLUSTER_CONFIG" 1
 			. $CLUSTER_CONFIG
 		    ASSIGN_COORDINATOR_VARS
 		    
@@ -283,7 +285,7 @@ CHK_PARAMS () {
 		    fi
 
 		else
-		    LOG_MSG "[INFO]:-Reading Cloudberry input configuration file $INPUT_CONFIG"
+		    LOG_MSG "[INFO]:-Reading CloudberryDB input configuration file $INPUT_CONFIG"
 		    READ_INPUT_CONFIG
 		fi
 
@@ -334,7 +336,7 @@ CHK_PARAMS () {
 		if [ x"" = x"$SEG_PREFIX" ]; then
 			ERROR_EXIT "[FATAL]:-SEG_PREFIX not specified in $CLUSTER_CONFIG file, is this the correct instance configuration file."
 		fi
-		if [ x"" = x"$DATA_DIRECTORY" ]; then
+		if [ "$SINGLENODE_MODE" == "false" ] && [ x"" = x"$DATA_DIRECTORY" ]; then
 			ERROR_EXIT "[FATAL]:-DATA_DIRECTORY not specified in $CLUSTER_CONFIG file, is this the correct instance configuration file."
 		fi
 
@@ -411,7 +413,7 @@ CHK_PARAMS () {
 
 		# DATA_DIRECTORY
 		((QE_PRIMARY_COUNT=${#DATA_DIRECTORY[@]}))
-		if [ $QE_PRIMARY_COUNT -eq 0 ]; then
+		if [ "$SINGLENODE_MODE" == "false" ] && [ $QE_PRIMARY_COUNT -eq 0 ]; then
 			ERROR_EXIT "[FATAL]:-Number of primary directories 0 (zero)"
 		fi
 
@@ -469,7 +471,7 @@ CHK_PARAMS () {
 		fi
 		# Number of QE hosts in this configuration
 		((NUM_QES=${#MACHINE_LIST[*]}))
-		if [ $NUM_QES -eq 0 ]; then
+		if [ "$SINGLENODE_MODE" == "false" ] && [ $NUM_QES -eq 0 ]; then
 			ERROR_EXIT "[FATAL]:-Number of Segment instances's 0 (zero)"
 		else
 			LOG_MSG "[INFO]:-Number of segment instance hosts = $NUM_QES"
@@ -1029,7 +1031,7 @@ CREATE_QE_ARRAY () {
 		LAST_HOST=$QE_HOST
 	done
 	if [ $DEBUG_LEVEL -eq 0 ] && [ x"" != x"$VERBOSE" ];then $ECHO;fi
-	if [ $MIRRORING -eq 1 ] ;then
+	if [ $MIRRORING -eq 1 ] && [ "$SINGLENODE_MODE" == "false" ] ;then
 		((MIRROR_OFFSET=$MIRROR_PORT_BASE-$PORT_BASE))
 		if [ $MIRROR_TYPE -eq 1 ];then
 			CREATE_SPREAD_MIRROR_ARRAY
@@ -1118,7 +1120,7 @@ DISPLAY_CONFIG () {
 		LOG_MSG "[INFO]:-Coordinator port           = $COORDINATOR_PORT" 1
 		LOG_MSG "[INFO]:-Coordinator instance dir   = $GP_DIR" 1
 		LOG_MSG "[INFO]:-Coordinator LOCALE         = $LOCALE_SETTING" 1
-		LOG_MSG "[INFO]:-Cloudberry segment prefix   = $SEG_PREFIX" 1
+		LOG_MSG "[INFO]:-CloudberryDB segment prefix   = $SEG_PREFIX" 1
 		LOG_MSG "[INFO]:-Coordinator Database       = $DATABASE_NAME" 1
 		LOG_MSG "[INFO]:-Coordinator connections    = $COORDINATOR_MAX_CONNECT" 1
 		LOG_MSG "[INFO]:-Coordinator buffers        = $COORDINATOR_SHARED_BUFFERS" 1
@@ -1181,7 +1183,7 @@ DISPLAY_CONFIG () {
             LOG_MSG "[INFO]:-Mirroring config           = OFF" 1
         fi
         LOG_MSG "[INFO]:----------------------------------------" 1
-        LOG_MSG "[INFO]:-Cloudberry Primary Segment Configuration" 1
+        LOG_MSG "[INFO]:-CloudberryDB Primary Segment Configuration" 1
         LOG_MSG "[INFO]:----------------------------------------" 1
         for I in "${QE_PRIMARY_ARRAY[@]}"
         do
@@ -1190,7 +1192,7 @@ DISPLAY_CONFIG () {
         done
         if [ $MIRRORING -ne 0 ]; then
             LOG_MSG "[INFO]:---------------------------------------" 1
-            LOG_MSG "[INFO]:-Cloudberry Mirror Segment Configuration" 1
+            LOG_MSG "[INFO]:-CloudberryDB Mirror Segment Configuration" 1
             LOG_MSG "[INFO]:---------------------------------------" 1
             for I in  "${QE_MIRROR_ARRAY[@]}"
             do
@@ -1199,7 +1201,7 @@ DISPLAY_CONFIG () {
             done
         fi
 
-		GET_REPLY "Continue with Cloudberry creation" 
+		GET_REPLY "Continue with CloudberryDB creation" 
 	fi
 	LOG_MSG "[INFO]:-End Function $FUNCNAME"
 }
@@ -1307,7 +1309,7 @@ CREATE_QD_DB () {
 		BACKOUT_COMMAND "if [ -d $GP_DIR ]; then $RM -Rf $GP_DIR; fi"
 		BACKOUT_COMMAND "$ECHO Removing Coordinator data directory files"
 		LOG_MSG "[INFO]:-Completed Coordinator instance initialization"
-		$ECHO "#Cloudberry specific configuration parameters for Coordinator instance database" >> ${GP_DIR}/$PG_CONF
+		$ECHO "#CloudberryDB specific configuration parameters for Coordinator instance database" >> ${GP_DIR}/$PG_CONF
 		$ECHO "#------------------------------------------------------------------------" >> ${GP_DIR}/$PG_CONF
 		LOG_MSG "[INFO]:-Setting the Coordinator port to $GP_PORT"
 		SED_PG_CONF ${GP_DIR}/$PG_CONF "$PORT_TXT" port=$GP_PORT 0
@@ -1329,6 +1331,12 @@ CREATE_QD_DB () {
 		LOG_MSG "[INFO]:-Setting Coordinator instance db id"
 		SED_PG_CONF ${GP_DIR}/$PG_INTERNAL_CONF "$DBID_TXT" "gp_dbid=$GP_DBID" 0
 		ERROR_CHK $? "set gp_dbid=$GP_DBID in ${GP_DIR}/$PG_INTERNAL_CONF" 1
+
+		if [ "$SINGLENODE_MODE" == "true" ]; then
+				LOG_MSG "[INFO]:-Setting Coordinator singlenodeMode"
+				SED_PG_CONF ${GP_DIR}/$PG_CONF "$SINGLENODE_MODE_TXT" "gp_internal_is_singlenode=on" 0
+				ERROR_CHK $? "set gp_internal_is_singlenode=on in ${GP_DIR}/$PG_CONF" 1
+		fi
 
 		if [  x"" != x"$PG_CONF_ADD_FILE" ]; then
 				LOG_MSG "[INFO]:-Processing additional configuration parameters"
@@ -1368,7 +1376,9 @@ CREATE_QD_DB () {
 		fi
 		UPDATE_GPCONFIG $GP_PORT $GP_DBID $GP_CONTENT $GP_HOSTNAME $GP_HOSTADDRESS $GP_PORT $GP_DIR p
 		SET_LOCALE_VARS_BASED_ON_COORDINATOR
-		LOAD_QE_SYSTEM_DATA $DEFAULTDB
+		if [ "$SINGLENODE_MODE" == "false" ]; then
+			LOAD_QE_SYSTEM_DATA $DEFAULTDB
+		fi
 		SET_VAR $QD_PRIMARY_ARRAY
 		LOG_MSG "[INFO]:-End Function $FUNCNAME"
 }
@@ -1513,16 +1523,16 @@ REGISTER_MIRRORS () {
 
 STOP_QD_PRODUCTION () {
     LOG_MSG "[INFO]:-Start Function $FUNCNAME"
-    LOG_MSG "[INFO]:-Restarting the Cloudberry instance in production mode" 1
+    LOG_MSG "[INFO]:-Restarting the CloudberryDB instance in production mode" 1
     if [ -f $GPSTOP ]; then
         GPSTOP_OPTS=$(OUTPUT_LEVEL_OPTS)
         export COORDINATOR_DATA_DIRECTORY=${COORDINATOR_DIRECTORY}/${SEG_PREFIX}-1
         $GPSTOP -a -l $LOG_DIR -m -d $COORDINATOR_DATA_DIRECTORY $GPSTOP_OPTS
         RETVAL=$?
         if [ $RETVAL -eq 0 ]; then
-            LOG_MSG "[INFO]:-Successfully shutdown the new Cloudberry instance"
+            LOG_MSG "[INFO]:-Successfully shutdown the new CloudberryDB instance"
         else
-            ERROR_EXIT "[FATAL]:-Error from Cloudberry instance shutdown, check log files"
+            ERROR_EXIT "[FATAL]:-Error from CloudberryDB instance shutdown, check log files"
         fi
     else
         ERROR_EXIT "[FATAL]:-$GPSTOP not located"
@@ -1574,12 +1584,12 @@ START_QD_PRODUCTION () {
 	$GPSTART -a -l $LOG_DIR -d $COORDINATOR_DATA_DIRECTORY $GPSTART_OPTS
 
         if [ $? -eq 0 ];then
-            LOG_MSG "[INFO]:-Successfully started new Cloudberry instance"
+            LOG_MSG "[INFO]:-Successfully started new CloudberryDB instance"
         else
 
             # this text is duplicated below
             LOG_MSG "[WARN]:" 1
-            LOG_MSG "[WARN]:-Failed to start Cloudberry instance; review gpstart output to" 1
+            LOG_MSG "[WARN]:-Failed to start CloudberryDB instance; review gpstart output to" 1
             LOG_MSG "[WARN]:- determine why gpstart failed and reinitialize cluster after resolving" 1
             LOG_MSG "[WARN]:- issues.  Not all initialization tasks have completed so the cluster" 1
             LOG_MSG "[WARN]:- should not be used." 1
@@ -1593,9 +1603,9 @@ START_QD_PRODUCTION () {
 
                 RETVAL=$?
                 if [ $RETVAL -eq 0 ]; then
-                    LOG_MSG "[INFO]:-Successfully shutdown the Cloudberry instance" 1
+                    LOG_MSG "[INFO]:-Successfully shutdown the CloudberryDB instance" 1
                 else
-                    ERROR_EXIT "[FATAL]:-Error from Cloudberry instance shutdown, check log files"
+                    ERROR_EXIT "[FATAL]:-Error from CloudberryDB instance shutdown, check log files"
                 fi
             else
                 LOG_MSG "[WARN]:-$GPSTOP not located" 1
@@ -1603,7 +1613,7 @@ START_QD_PRODUCTION () {
 
             # this text is duplicated above
             LOG_MSG "[WARN]:" 1
-            LOG_MSG "[WARN]:-Failed to start Cloudberry instance; review gpstart output to" 1
+            LOG_MSG "[WARN]:-Failed to start CloudberryDB instance; review gpstart output to" 1
             LOG_MSG "[WARN]:- determine why gpstart failed and reinitialize cluster after resolving" 1
             LOG_MSG "[WARN]:- issues.  Not all initialization tasks have completed so the cluster" 1
             LOG_MSG "[WARN]:- should not be used." 1
@@ -1613,7 +1623,7 @@ START_QD_PRODUCTION () {
     else
 	ERROR_EXIT "[FATAL]:-$GPSTART not located"
     fi
-    LOG_MSG "[INFO]:-Completed restart of Cloudberry instance in production mode" 1
+    LOG_MSG "[INFO]:-Completed restart of CloudberryDB instance in production mode" 1
     LOG_MSG "[INFO]:-End Function $FUNCNAME"
 }
 
@@ -1634,7 +1644,7 @@ FORCE_FTS_PROBE () {
             $PSQL -p $GP_PORT -d "$DEFAULTDB" -A -t -c "select * from gp_segment_configuration where (mode = 'n' or status = 'd') and content != -1;" >> $LOG_FILE 2>&1
             $PSQL -p $GP_PORT -d "$DEFAULTDB" -A -t -c "select * from gp_stat_replication where sync_error != 'none' or sync_state != 'sync';" >> $LOG_FILE 2>&1
             LOG_MSG "[WARN]:" 1
-            LOG_MSG "[WARN]:-Failed to start Cloudberry instance; please review gpinitsystem log to determine failure." 1
+            LOG_MSG "[WARN]:-Failed to start CloudberryDB instance; please review gpinitsystem log to determine failure." 1
 			# FTS_TODO: should support notify fts, then re-enable this function 
             # ERROR_EXIT "[FATAL]:-Some primary/mirror segment pairs were found to be not in sync"
             break;
@@ -1770,7 +1780,7 @@ READ_INPUT_CONFIG () {
     $CAT $INPUT_CONFIG|$GREP -v "^\s*\(#.*\)\?$" >> $LOG_FILE
     LOG_MSG "[INFO]:-Completed $INPUT_CONFIG dump to logfile"
     # Source the cluster configuration file
-    LOG_MSG "[INFO]:-Reading Cloudberry configuration file $INPUT_CONFIG"
+    LOG_MSG "[INFO]:-Reading CloudberryDB configuration file $INPUT_CONFIG"
 
     . $INPUT_CONFIG
     SET_VAR $QD_PRIMARY_ARRAY
@@ -2022,7 +2032,7 @@ CREATE_ETCD() {
         if [ x"$CLUSTER_BOOT_MODE" = x"PRODUCTION" ];then
             ETCD_CONFIG_FILE_PATH=`readlink -f $PG_CONF_ADD_FILE`
             if [ ! -x ${GPHOME}/bin/etcd ];then
-                ERROR_EXIT "[FATAL]: No mgmt executables(etcd) found for Cloudberry installation in ${GPHOME}/bin"
+                ERROR_EXIT "[FATAL]: No mgmt executables(etcd) found for CloudberryDB installation in ${GPHOME}/bin"
             fi
         fi
         local etcd_url=`GENERATE_ETCD_URL 2380`
@@ -2056,7 +2066,7 @@ CREATE_ETCD() {
 
 CREATE_FTS() {
         if [ ! -x ${GPHOME}/bin/gpfts ]; then
-            ERROR_EXIT "[FATAL]: No mgmt executables(gpfts) found for Cloudberry installation in ${GPHOME}/bin"
+            ERROR_EXIT "[FATAL]: No mgmt executables(gpfts) found for CloudberryDB installation in ${GPHOME}/bin"
         fi
         for fts in ${FTS_HOST_MACHINE_LIST[*]}
         do
@@ -2128,6 +2138,7 @@ while getopts ":vaqe:c:l:-:p:m:h:n:s:P:S:b:DB:I:O:E:F:M:U:T:C" opt
 					NAME=${OPTARG%%=*}
 					VAL=${OPTARG#*=}
 					case $NAME in
+						"singlenodeMode"  ) SINGLENODE_MODE=$VAL ;;
 						"max_connections" ) COORDINATOR_MAX_CONNECT=$VAL ;;
 						"shared_buffers"  ) NEW_BUFFERS=$VAL ;;
 						"su_password"     ) GP_PASSWD=$VAL ;;
@@ -2199,7 +2210,10 @@ else
     CHK_MULTI_HOME
     CREATE_QE_ARRAY
     CHK_QE_ARRAY_PORT_RANGES
-    CHK_QES
+
+    if [ "$SINGLENODE_MODE" == "false" ] ; then
+        CHK_QES
+    fi
 
     if [ x"" != x"$OUTPUT_CONFIG" ] ; then
         DUMP_OUTPUT_CONFIG
@@ -2207,7 +2221,9 @@ else
     fi
 
     DISPLAY_CONFIG
-    ARRAY_REORDER
+	if [ "$SINGLENODE_MODE" == "false" ] ; then
+		ARRAY_REORDER
+	fi
 fi
 
 if [ $USE_EXTERNAL_FTS -ne 0 ];then
@@ -2224,19 +2240,21 @@ CREATE_QD_DB
 
 CREATE_ARRAY_SORTED_ON_CONTENT_ID
 
-CREATE_SEGMENT IS_PRIMARY
-if [ $REPORT_FAIL -ne 0 ];then
-	LOG_MSG "[FATAL]:-Errors generated from parallel processes" 1
-	LOG_MSG "[INFO]:-Dumped contents of status file to the log file" 1
-	ERROR_EXIT "[FATAL]:-Failures detected, see log file $LOG_FILE for more detail"
-else
-	LOG_MSG "[INFO]:-Removing back out file" 1
-	$RM -f $BACKOUT_FILE
-	LOG_MSG "[INFO]:-No errors generated from parallel processes" 1
-fi
+if [ "$SINGLENODE_MODE" == "false" ]; then
+	CREATE_SEGMENT IS_PRIMARY
+	if [ $REPORT_FAIL -ne 0 ];then
+		LOG_MSG "[FATAL]:-Errors generated from parallel processes" 1
+		LOG_MSG "[INFO]:-Dumped contents of status file to the log file" 1
+		ERROR_EXIT "[FATAL]:-Failures detected, see log file $LOG_FILE for more detail"
+	else
+		LOG_MSG "[INFO]:-Removing back out file" 1
+		$RM -f $BACKOUT_FILE
+		LOG_MSG "[INFO]:-No errors generated from parallel processes" 1
+	fi
 
-if [ -f $DCA_VERSION_FILE ]; then
-	SET_DCA_CONFIG_SETTINGS	
+	if [ -f $DCA_VERSION_FILE ]; then
+		SET_DCA_CONFIG_SETTINGS
+	fi
 fi
 
 if [ $USE_EXTERNAL_FTS -ne 0 ];then
@@ -2277,8 +2295,8 @@ LOG_MSG "[INFO]:-To complete the environment configuration, please " 1
 LOG_MSG "[INFO]:-update $USER_NAME .bashrc file with the following" 1
 LOG_MSG "[INFO]:-1. Ensure that the greenplum_path.sh file is sourced" 1
 LOG_MSG "[INFO]:-2. Add \"export COORDINATOR_DATA_DIRECTORY=${COORDINATOR_DIRECTORY}/${SEG_PREFIX}-1\"" 1
-LOG_MSG "[INFO]:-   to access the Cloudberry scripts for this instance:" 1
-LOG_MSG "[INFO]:-   or, use -d ${COORDINATOR_DIRECTORY}/${SEG_PREFIX}-1 option for the Cloudberry scripts" 1
+LOG_MSG "[INFO]:-   to access the CloudberryDB scripts for this instance:" 1
+LOG_MSG "[INFO]:-   or, use -d ${COORDINATOR_DIRECTORY}/${SEG_PREFIX}-1 option for the CloudberryDB scripts" 1
 LOG_MSG "[INFO]:-   Example gpstate -d ${COORDINATOR_DIRECTORY}/${SEG_PREFIX}-1" 1
 LOG_MSG "[INFO]:-Script log file = $LOG_FILE" 1
 LOG_MSG "[INFO]:-To remove instance, run gpdeletesystem utility" 1
@@ -2292,7 +2310,7 @@ if [ x"" != x"$STANDBY_HOSTNAME" ];then
 		*) LOG_MSG "[WARN]:-Standby Coordinator failed to initialize" 1
 	esac
 else
-    LOG_MSG "[INFO]:-To initialize a Standby Coordinator Segment for this Cloudberry instance" 1
+    LOG_MSG "[INFO]:-To initialize a Standby Coordinator Segment for this CloudberryDB instance" 1
     LOG_MSG "[INFO]:-Review options for gpinitstandby" 1
 fi
 
@@ -2301,8 +2319,6 @@ LOG_MSG "[INFO]:-The Coordinator ${COORDINATOR_DATA_DIRECTORY}/$PG_HBA post gpin
 LOG_MSG "[INFO]:-has been configured to allow all hosts within this new" 1
 LOG_MSG "[INFO]:-array to intercommunicate. Any hosts external to this" 1
 LOG_MSG "[INFO]:-new array must be explicitly added to this file" 1
-LOG_MSG "[INFO]:-Refer to the Cloudberry Admin support guide which is" 1
-LOG_MSG "[INFO]:-located in the $GPHOME/docs directory" 1
 LOG_MSG "[INFO]:-------------------------------------------------------" 1
 
 # Make sure that the user sees that there's an error with the standby

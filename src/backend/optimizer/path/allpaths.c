@@ -21,6 +21,7 @@
 #include <limits.h>
 #include <math.h>
 
+#include "access/relation.h"
 #include "access/sysattr.h"
 #include "access/tsmapi.h"
 #include "catalog/catalog.h"
@@ -60,6 +61,7 @@
 #include "cdb/cdbmutate.h"		/* cdbmutate_warn_ctid_without_segid */
 #include "cdb/cdbpath.h"		/* cdbpath_rows() */
 #include "cdb/cdbutil.h"
+#include "cdb/cdbvars.h"
 
 // TODO: these planner gucs need to be refactored into PlannerConfig.
 bool		gp_enable_sort_limit = false;
@@ -2474,7 +2476,7 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	safetyInfo.unsafeLeaky = rte->security_barrier;
 
-	forceDistRand = rte->forceDistRandom;
+	forceDistRand = rte->forceDistRandom && !IS_SINGLENODE();
 	/* CDB: Could be a preplanned subquery from window_planner. */
 	if (rte->subquery_root == NULL)
 	{
@@ -2975,7 +2977,7 @@ set_cte_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 
 		config->honor_order_by = false;
 
-		if (!cte->cterecursive)
+		if (!cte->cterecursive && subquery->commandType == CMD_SELECT)
 		{
 			/*
 			 * Adjust the subquery so that 'root', i.e. this subquery, is the
@@ -3129,7 +3131,9 @@ set_namedtuplestore_pathlist(PlannerInfo *root, RelOptInfo *rel,
 							 RangeTblEntry *rte)
 {
 	Relids		required_outer;
+	Relation	relation = NULL;
 
+	relation = relation_open(rte->relid, NoLock);
 	/* Mark rel with estimated output rows, width, etc */
 	set_namedtuplestore_size_estimates(root, rel);
 
@@ -3139,10 +3143,14 @@ set_namedtuplestore_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * refs in its tlist.
 	 */
 	required_outer = rel->lateral_relids;
+	/* Use base table or matview's policy */
+	if (rel->cdbpolicy == NULL)
+		rel->cdbpolicy = relation->rd_cdbpolicy;
 
 	/* Generate appropriate path */
 	add_path(rel, create_namedtuplestorescan_path(root, rel, required_outer), root);
 
+	relation_close(relation, NoLock);
 	/* Select cheapest path (pretty easy in this case...) */
 	set_cheapest(rel);
 }

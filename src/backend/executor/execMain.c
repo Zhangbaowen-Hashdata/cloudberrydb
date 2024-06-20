@@ -39,6 +39,7 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "pgstat.h"
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
@@ -52,11 +53,13 @@
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
+#include "executor/nodeModifyTable.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/plannodes.h"
 #include "parser/parsetree.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -70,9 +73,9 @@
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/metrics_utils.h"
+#include "utils/queryenvironment.h"
 
 #include "utils/ps_status.h"
-#include "utils/snapmgr.h"
 #include "utils/typcache.h"
 #include "utils/workfile_mgr.h"
 #include "utils/faultinjector.h"
@@ -86,6 +89,7 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/catalog.h"
 #include "catalog/oid_dispatch.h"
+#include "catalog/pg_directory_table.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
 #include "commands/createas.h"
@@ -310,6 +314,13 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/*
 	 * Fill in the query environment, if any, from queryDesc.
 	 */
+	if (queryDesc->ddesc && queryDesc->ddesc->namedRelList)
+	{
+		if (queryDesc->queryEnv == NULL)
+			queryDesc->queryEnv = create_queryEnv();
+		/* Update environment */
+		AddPreassignedENR(queryDesc->queryEnv, queryDesc->ddesc->namedRelList);
+	}
 	estate->es_queryEnv = queryDesc->queryEnv;
 
 	/*
@@ -583,6 +594,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 			if (queryDesc->ddesc != NULL)
 			{
 				queryDesc->ddesc->sliceTable = estate->es_sliceTable;
+				FillQueryDispatchDesc(estate->es_queryEnv, queryDesc->ddesc);
 				/*
 				 * For CTAS querys that contain initplan, we need to copy a new oid dispatch list,
 				 * since the preprocess_initplan will start a subtransaction, and if it's rollbacked,
@@ -762,7 +774,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	bool		sendTuples;
 	MemoryContext oldcontext;
 	EndpointExecState *endpointExecState = NULL;
-
+	uint64 es_processed = 0;
 	/*
 	 * NOTE: Any local vars that are set in the PG_TRY block and examined in the
 	 * PG_CATCH block should be declared 'volatile'. (setjmp shenanigans)
@@ -937,11 +949,17 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 			/* should never happen */
 			Assert(!"undefined parallel execution strategy");
 		}
+		if ((exec_identity == GP_IGNORE || exec_identity == GP_ROOT_SLICE) && operation != CMD_SELECT)
+			es_processed = mppExecutorWait(queryDesc);
     }
 	PG_CATCH();
 	{
         /* Close down interconnect etc. */
 		mppExecutorCleanup(queryDesc);
+		if (list_length(queryDesc->plannedstmt->paramExecTypes) > 0)
+		{
+			postprocess_initplans(queryDesc);
+		}
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
@@ -981,7 +999,8 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	if (sendTuples)
 		dest->rShutdown(dest);
-
+	if (es_processed)
+		estate->es_processed = es_processed;
 	if (queryDesc->totaltime)
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
 
@@ -1502,8 +1521,8 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 	 */
 	if (plannedstmt->intoClause != NULL)
 	{
-		Assert(plannedstmt->intoClause->rel);
-		if (plannedstmt->intoClause->rel->relpersistence == RELPERSISTENCE_TEMP)
+		if ((plannedstmt->intoClause->rel && plannedstmt->intoClause->rel->relpersistence == RELPERSISTENCE_TEMP)
+		   || (plannedstmt->intoClause->rel == NULL && plannedstmt->intoClause->ivm))
 			ExecutorMarkTransactionDoesWrites();
 		else
 			PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
@@ -1870,7 +1889,15 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	 *   Also need to create tables in advance.
 	 */
 	if (queryDesc->plannedstmt->intoClause != NULL)
-		intorel_initplan(queryDesc, eflags);
+	{
+		if (queryDesc->plannedstmt->intoClause->rel)
+			intorel_initplan(queryDesc, eflags);
+		if (queryDesc->plannedstmt->intoClause->rel == NULL &&
+			queryDesc->plannedstmt->intoClause->ivm && Gp_role == GP_ROLE_EXECUTE)
+		{
+			transientenr_init(queryDesc);
+		}
+	}
 	else if(queryDesc->plannedstmt->copyIntoClause != NULL)
 	{
 		queryDesc->dest = CreateCopyDestReceiver();
@@ -1901,11 +1928,15 @@ InitPlan(QueryDesc *queryDesc, int eflags)
  * CheckValidRowMarkRel.
  */
 void
-CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
+CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation, ModifyTableState *mtstate)
 {
 	Relation	resultRel = resultRelInfo->ri_RelationDesc;
 	TriggerDesc *trigDesc = resultRel->trigdesc;
 	FdwRoutine *fdwroutine;
+	ModifyTable *node;
+	int			whichrel;
+	List 		*updateColnos;
+	ListCell	*lc;
 
 	switch (resultRel->rd_rel->relkind)
 	{
@@ -2063,6 +2094,40 @@ CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation)
 						 errmsg("cannot change AO visibility map relation \"%s\"",
 								RelationGetRelationName(resultRel))));
 			break;
+		case RELKIND_DIRECTORY_TABLE:
+			switch(operation)
+			{
+				case CMD_INSERT:
+				case CMD_DELETE:
+					ereport(ERROR,
+								(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+								 errmsg("cannot change directory table \"%s\"",
+										RelationGetRelationName(resultRel))));
+					break;
+				case CMD_UPDATE:
+					if (mtstate)
+					{
+						node = (ModifyTable *) mtstate->ps.plan;
+						whichrel = mtstate->mt_lastResultIndex;
+
+						updateColnos = (List *) list_nth(node->updateColnosLists, whichrel);
+
+						foreach(lc, updateColnos)
+						{
+							AttrNumber targetattnum = lfirst_int(lc);
+
+							if (targetattnum != DIRECTORY_TABLE_TAG_COLUMN_ATTNUM)
+								ereport(ERROR,
+											(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+											 errmsg("Only allow to update directory \"tag\" column.")));
+						}
+					}
+					break;
+				default:
+					elog(ERROR, "unrecognized CmdType: %d", (int) operation);
+					break;
+			}
+			break;
 
 		default:
 			ereport(ERROR,
@@ -2126,6 +2191,14 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot lock rows in foreign table \"%s\"",
+								RelationGetRelationName(rel))));
+			break;
+		case RELKIND_DIRECTORY_TABLE:
+			/* Allow referencing a directory table, but not actual locking clauses */
+			if (markType != ROW_MARK_REFERENCE)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("cannot lock rows in directory table \"%s\"",
 								RelationGetRelationName(rel))));
 			break;
 		default:
@@ -2315,6 +2388,18 @@ ExecPostprocessPlan(EState *estate)
 	 */
 	estate->es_direction = ForwardScanDirection;
 
+	if (Gp_role == GP_ROLE_DISPATCH)
+	{
+		/* Fire after triggers. */
+		foreach(lc, estate->es_auxmodifytables)
+		{
+			PlanState  *ps = (PlanState *) lfirst(lc);
+			ModifyTableState *node = castNode(ModifyTableState, ps);
+
+			fireASTriggers(node);
+		}
+		return;
+	}
 	/*
 	 * Run any secondary ModifyTable nodes to completion, in case the main
 	 * query did not fetch all rows from them.  (We do this to ensure that
@@ -2503,7 +2588,7 @@ ExecutePlan(EState *estate,
 		EnterParallelMode();
 
 	/*
-	 * GP style parallelism won't interfere PG style parallel mechanism.
+	 * CBDB style parallelism won't interfere PG style parallel mechanism.
 	 * So that we will pass if use_parallel_mode is true which means there exists
 	 * Gather/GatherMerge node.
 	 */

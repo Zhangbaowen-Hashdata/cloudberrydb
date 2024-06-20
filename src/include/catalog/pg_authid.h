@@ -6,6 +6,7 @@
  *	  pg_shadow and pg_group are now publicly accessible views on pg_authid.
  *
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 2006-2010, Greenplum inc.
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -42,6 +43,7 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 	bool		rolreplication; /* role used for streaming replication */
 	bool		rolbypassrls;	/* bypasses row-level security? */
 	int32		rolconnlimit;	/* max connections allowed (-1=no limit) */
+	bool		rolenableprofile BKI_DEFAULT(f) BKI_FORCE_NOT_NULL;	/* whether user can use profile */
 
 	/* remaining fields may be null; use heap_getattr to read them! */
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
@@ -51,6 +53,18 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 	/*
 	 * GP added fields
 	 */
+
+	Oid	 	rolprofile BKI_DEFAULT(10140) BKI_FORCE_NOT_NULL;	/* name of profile */
+
+	int16		rolaccountstatus BKI_DEFAULT(0) BKI_FORCE_NOT_NULL;	/* status of account */
+
+	int32		rolfailedlogins BKI_DEFAULT(0) BKI_FORCE_NOT_NULL;	/* number of failed logins */
+
+	timestamptz	rolpasswordsetat BKI_DEFAULT(_null_);			/* password set time, if any */
+
+	timestamptz	rollockdate BKI_DEFAULT(_null_) BKI_FORCE_NULL;		/* account lock time, if any */
+
+	timestamptz	rolpasswordexpire BKI_DEFAULT(_null_) BKI_FORCE_NULL;	/* account password expire time, if any */
 
 	/* ID of resource queue for this role */
 	Oid			rolresqueue BKI_DEFAULT(6055);
@@ -68,6 +82,15 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 	Oid			rolresgroup BKI_DEFAULT(6438);
 #endif
 } FormData_pg_authid;
+
+typedef enum
+{
+    ROLE_ACCOUNT_STATUS_OPEN,
+    ROLE_ACCOUNT_STATUS_LOCKED_TIMED,
+    ROLE_ACCOUNT_STATUS_LOCKED,
+    ROLE_ACCOUNT_STATUS_EXPIRED_GRACE,
+    ROLE_ACCOUNT_STATUS_EXPIRED
+} ROLE_ACCOUNT_STATUS;
 
 /* GPDB added foreign key definitions for gpcheckcat. */
 FOREIGN_KEY(rolresqueue REFERENCES pg_resqueue(oid));

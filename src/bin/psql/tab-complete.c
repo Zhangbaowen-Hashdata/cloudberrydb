@@ -470,6 +470,14 @@ static const SchemaQuery Query_for_list_of_tables = {
 	.result = "pg_catalog.quote_ident(c.relname)",
 };
 
+static const SchemaQuery Query_for_list_of_directory_tables = {
+	.catname = "pg_catalog.pg_class c",
+	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_DIRECTORY_TABLE) ")",
+	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
+	.namespace = "c.relnamespace",
+	.result = "pg_catalog.quote_ident(c.relname)",
+};
+
 static const SchemaQuery Query_for_list_of_partitioned_tables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition = "c.relkind IN (" CppAsString2(RELKIND_PARTITIONED_TABLE) ")",
@@ -556,6 +564,7 @@ static const SchemaQuery Query_for_list_of_selectables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+	CppAsString2(RELKIND_DIRECTORY_TABLE) ", "
 	CppAsString2(RELKIND_SEQUENCE) ", "
 	CppAsString2(RELKIND_VIEW) ", "
 	CppAsString2(RELKIND_MATVIEW) ", "
@@ -586,6 +595,7 @@ static const SchemaQuery Query_for_list_of_analyzables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+	CppAsString2(RELKIND_DIRECTORY_TABLE) ", "
 	CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
 	CppAsString2(RELKIND_MATVIEW) ", "
 	CppAsString2(RELKIND_FOREIGN_TABLE) ")",
@@ -599,6 +609,7 @@ static const SchemaQuery Query_for_list_of_indexables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
+	CppAsString2(RELKIND_DIRECTORY_TABLE) ", "
 	CppAsString2(RELKIND_PARTITIONED_TABLE) ", "
 	CppAsString2(RELKIND_MATVIEW) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
@@ -617,7 +628,7 @@ static const SchemaQuery Query_for_list_of_clusterables = {
 	.catname = "pg_catalog.pg_class c",
 	.selcondition =
 	"c.relkind IN (" CppAsString2(RELKIND_RELATION) ", "
-	CppAsString2(RELKIND_MATVIEW) ")",
+	CppAsString2(RELKIND_MATVIEW) ", " CppAsString2(RELKIND_DIRECTORY_TABLE) ")",
 	.viscondition = "pg_catalog.pg_table_is_visible(c.oid)",
 	.namespace = "c.relnamespace",
 	.result = "pg_catalog.quote_ident(c.relname)",
@@ -919,6 +930,11 @@ static const SchemaQuery Query_for_list_of_collations = {
 "   FROM pg_catalog.pg_user_mappings "\
 "  WHERE substring(pg_catalog.quote_ident(usename),1,%d)='%s'"
 
+#define Query_for_list_of_storage_servers \
+" SELECT pg_catalog.quote_ident(srvname) "\
+"	FROM pg_catalog.gp_storage_server "\
+"  WHERE substring(pg_catalog.quote_ident(srvname),1,%d)='%s'"
+
 #define Query_for_list_of_access_methods \
 " SELECT pg_catalog.quote_ident(amname) "\
 "   FROM pg_catalog.pg_am "\
@@ -960,6 +976,10 @@ static const SchemaQuery Query_for_list_of_collations = {
 " SELECT pg_catalog.quote_ident(extname) "\
 "   FROM pg_catalog.pg_extension "\
 "  WHERE substring(pg_catalog.quote_ident(extname),1,%d)='%s'"
+
+#define Query_for_list_of_profiles \
+"SELECT pg_catalog.quote_ident(profilename) FROM pg_catalog.pg_profile "\
+" WHERE substring(pg_catalog.quote_ident(profilename),1,%d)='%s'"
 
 #define Query_for_list_of_available_extensions \
 " SELECT pg_catalog.quote_ident(name) "\
@@ -1095,6 +1115,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"DATABASE", Query_for_list_of_databases},
 	{"DEFAULT PRIVILEGES", NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
 	{"DICTIONARY", Query_for_list_of_ts_dictionaries, NULL, NULL, THING_NO_SHOW},
+	{"DIRECTORY TABLE", NULL, NULL, &Query_for_list_of_directory_tables},
 	{"DOMAIN", NULL, NULL, &Query_for_list_of_domains},
 	{"EVENT TRIGGER", NULL, NULL, NULL},
 	{"EXTENSION", Query_for_list_of_extensions},
@@ -1102,6 +1123,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"FOREIGN TABLE", NULL, NULL, NULL},
 	{"FUNCTION", NULL, NULL, Query_for_list_of_functions},
 	{"GROUP", Query_for_list_of_roles},
+	{"INCREMENTAL MATERIALIZED VIEW", NULL, NULL, &Query_for_list_of_matviews, THING_NO_DROP | THING_NO_ALTER},
 	{"INDEX", NULL, NULL, &Query_for_list_of_indexes},
 	{"LANGUAGE", Query_for_list_of_languages},
 	{"LARGE OBJECT", NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -1113,6 +1135,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"PARSER", Query_for_list_of_ts_parsers, NULL, NULL, THING_NO_SHOW},
 	{"POLICY", NULL, NULL, NULL},
 	{"PROCEDURE", NULL, NULL, Query_for_list_of_procedures},
+	{"PROFILE", Query_for_list_of_profiles},
 	{"PUBLICATION", NULL, Query_for_list_of_publications},
 	{"RESOURCE", NULL},
 	{"ROLE", Query_for_list_of_roles},
@@ -1121,6 +1144,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"SCHEMA", Query_for_list_of_schemas},
 	{"SEQUENCE", NULL, NULL, &Query_for_list_of_sequences},
 	{"SERVER", Query_for_list_of_servers},
+	{"STORAGE SERVER", Query_for_list_of_storage_servers},
 	{"STATISTICS", NULL, NULL, &Query_for_list_of_statistics},
 	{"SUBSCRIPTION", NULL, Query_for_list_of_subscriptions},
 	{"SYSTEM", NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -1142,6 +1166,7 @@ static const pgsql_thing_t words_after_create[] = {
 																	 * TABLE ... */
 	{"USER", Query_for_list_of_roles " UNION SELECT 'MAPPING FOR'"},
 	{"USER MAPPING FOR", NULL, NULL, NULL},
+	{"STORAGE USER MAPPING FOR", NULL, NULL, NULL},
 	{"VIEW", NULL, NULL, &Query_for_list_of_views},
 	{"WAREHOUSE", NULL},
 	{NULL}						/* end of list */
@@ -1670,6 +1695,12 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER AGGREGATE,FUNCTION,PROCEDURE,ROUTINE <name> */
 	else if (Matches("ALTER", "AGGREGATE|FUNCTION|PROCEDURE|ROUTINE", MatchAny))
 		COMPLETE_WITH("(");
+	/* ALTER PROFILE <name> */
+	else if (Matches("ALTER", "PROFILE", MatchAny))
+		COMPLETE_WITH("LIMIT", "RENAME TO");
+	/* ALTER PROFILE <name> LIMIT */
+	else if (HeadMatches("ALTER", "PROFILE", MatchAny) && TailMatches("LIMIT"))
+		COMPLETE_WITH("FAILED_LOGIN_ATTEMPTS", "PASSWORD_REUSE_MAX", "PASSWORD_LOCK_TIME");
 	/* ALTER AGGREGATE <name> (...) */
 	else if (Matches("ALTER", "AGGREGATE", MatchAny, MatchAny))
 	{
@@ -1796,6 +1827,20 @@ psql_completion(const char *text, int start, int end)
 					  "INHERIT", "NO INHERIT", "OPTIONS", "OWNER TO",
 					  "RENAME", "SET", "VALIDATE CONSTRAINT");
 
+	/* ALTER STORAGE */
+	else if (Matches("ALTER", "STORAGE"))
+		COMPLETE_WITH("SERVER", "USER MAPPING");
+
+	/* ALTER DIRECTORY */
+	else if (Matches("ALTER", "DIRECTORY"))
+		COMPLETE_WITH("TABLE");
+
+	/* ALTER DIRECTORY TABLE <name> */
+	else if (Matches("ALTER", "DIRECTORY", "TABLE", MatchAny))
+		COMPLETE_WITH("ALTER", "DISABLE TRIGGER", "ENABLE",
+					  "OPTIONS", "OWNER TO",
+					  "RENAME", "SET");
+
 	/* ALTER INDEX */
 	else if (Matches("ALTER", "INDEX"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes,
@@ -1876,7 +1921,8 @@ psql_completion(const char *text, int start, int end)
 					  "NOCREATEDB", "NOCREATEROLE", "NOINHERIT",
 					  "NOLOGIN", "NOREPLICATION", "NOSUPERUSER", "PASSWORD",
 					  "RENAME TO", "REPLICATION", "RESET", "SET", "SUPERUSER",
-					  "VALID UNTIL", "WITH");
+					  "VALID UNTIL", "WITH", "PROFILE", "ENABLE PROFILE",
+					  "DISABLE PROFILE", "ACCOUNT");
 
 	/* ALTER USER,ROLE <name> WITH */
 	else if (Matches("ALTER", "USER|ROLE", MatchAny, "WITH"))
@@ -1886,8 +1932,11 @@ psql_completion(const char *text, int start, int end)
 					  "NOCREATEDB", "NOCREATEROLE", "NOINHERIT",
 					  "NOLOGIN", "NOREPLICATION", "NOSUPERUSER", "PASSWORD",
 					  "RENAME TO", "REPLICATION", "RESET", "SET", "SUPERUSER",
-					  "VALID UNTIL");
+					  "VALID UNTIL", "PROFILE", "ENABLE PROFILE",
+					  "DISABLE PROFILE", "ACCOUNT");
 
+	else if (Matches("ALTER", "USER|ROLE", MatchAny) && TailMatches("ACCOUNT"))
+		COMPLETE_WITH("LOCK", "UNLOCK");
 	/* ALTER DEFAULT PRIVILEGES */
 	else if (Matches("ALTER", "DEFAULT", "PRIVILEGES"))
 		COMPLETE_WITH("FOR ROLE", "IN SCHEMA");
@@ -1950,6 +1999,9 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SERVER <name> */
 	else if (Matches("ALTER", "SERVER", MatchAny))
 		COMPLETE_WITH("VERSION", "OPTIONS", "OWNER TO", "RENAME TO");
+	/* ALTER STORAGE SERVER <name> */
+	else if (Matches("ALTER", "STORAGE", "SERVER", MatchAny))
+		COMPLETE_WITH("OPTIONS", "RENAME TO");
 	/* ALTER SERVER <name> VERSION <version> */
 	else if (Matches("ALTER", "SERVER", MatchAny, "VERSION", MatchAny))
 		COMPLETE_WITH("OPTIONS");
@@ -2402,8 +2454,8 @@ psql_completion(const char *text, int start, int end)
 					  "INDEX", "LANGUAGE", "POLICY", "PUBLICATION", "RULE",
 					  "SCHEMA", "SEQUENCE", "STATISTICS", "SUBSCRIPTION",
 					  "TABLE", "TYPE", "VIEW", "MATERIALIZED VIEW",
-					  "COLUMN", "AGGREGATE", "FUNCTION",
-					  "PROCEDURE", "ROUTINE",
+					  "COLUMN", "AGGREGATE", "FUNCTION", "STORAGE SERVER",
+					  "PROCEDURE", "PROFILE", "ROUTINE",
 					  "OPERATOR", "TRIGGER", "CONSTRAINT", "DOMAIN",
 					  "LARGE OBJECT", "TABLESPACE", "TEXT SEARCH", "ROLE");
 	else if (Matches("COMMENT", "ON", "ACCESS", "METHOD"))
@@ -2544,6 +2596,10 @@ psql_completion(const char *text, int start, int end)
 	/* First off we complete CREATE UNIQUE with "INDEX" */
 	else if (TailMatches("CREATE", "UNIQUE"))
 		COMPLETE_WITH("INDEX");
+
+	/* CREATE STORAGE */
+	else if (Matches("CREATE", "STORAGE"))
+		COMPLETE_WITH("SERVER", "USER MAPPING");
 
 	/*
 	 * If we have CREATE|UNIQUE INDEX, then add "ON", "CONCURRENTLY", and
@@ -2745,6 +2801,10 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("CREATE", "SERVER", MatchAny))
 		COMPLETE_WITH("TYPE", "VERSION", "FOREIGN DATA WRAPPER");
 
+/* CREATE STORAGE SERVER <name> */
+	else if (Matches("CREATE", "STORAGE", "SERVER", MatchAny))
+		COMPLETE_WITH("OPTIONS");
+
 /* CREATE STATISTICS <name> */
 	else if (Matches("CREATE", "STATISTICS", MatchAny))
 		COMPLETE_WITH("(", "ON");
@@ -2762,7 +2822,7 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or MATVIEW */
 	else if (TailMatches("CREATE", "UNLOGGED"))
-		COMPLETE_WITH("TABLE", "MATERIALIZED VIEW");
+		COMPLETE_WITH("TABLE", "MATERIALIZED VIEW", "INCREMENTAL MATERIALIZED VIEW");
 	/* Complete PARTITION BY with RANGE ( or LIST ( or ... */
 	else if (TailMatches("PARTITION", "BY"))
 		COMPLETE_WITH("RANGE (", "LIST (", "HASH (");
@@ -2993,7 +3053,8 @@ psql_completion(const char *text, int start, int end)
 					  "NOCREATEDB", "NOCREATEROLE", "NOINHERIT",
 					  "NOLOGIN", "NOREPLICATION", "NOSUPERUSER", "PASSWORD",
 					  "REPLICATION", "ROLE", "SUPERUSER", "SYSID",
-					  "VALID UNTIL", "WITH");
+					  "VALID UNTIL", "WITH", "PROFILE", "ENABLE PROFILE",
+					  "DISABLE PROFILE", "ACCOUNT");
 
 /* CREATE ROLE,USER,GROUP <name> WITH */
 	else if (Matches("CREATE", "ROLE|GROUP|USER", MatchAny, "WITH"))
@@ -3004,7 +3065,8 @@ psql_completion(const char *text, int start, int end)
 					  "NOCREATEDB", "NOCREATEROLE", "NOINHERIT",
 					  "NOLOGIN", "NOREPLICATION", "NOSUPERUSER", "PASSWORD",
 					  "REPLICATION", "ROLE", "SUPERUSER", "SYSID",
-					  "VALID UNTIL");
+					  "VALID UNTIL", "PROFILE", "ENABLE PROFILE",
+					  "DISABLE PROFILE", "ACCOUNT");
 
 	/* complete CREATE ROLE,USER,GROUP <name> IN with ROLE,GROUP */
 	else if (Matches("CREATE", "ROLE|USER|GROUP", MatchAny, "IN"))
@@ -3018,6 +3080,13 @@ psql_completion(const char *text, int start, int end)
 
 		COMPLETE_WITH_LIST(list_CREATERESOURCEGROUP);
 	 }
+
+	/* CREATE PROFILE <name> LIMIT */
+	else if (Matches("CREATE", "PROFILE", MatchAny))
+		COMPLETE_WITH("LIMIT");
+	else if (Matches("CREATE", "PROFILE", MatchAny, "LIMIT"))
+		COMPLETE_WITH("FAILED_LOGIN_ATTEMPTS", "PASSWORD_REUSE_MAX", "PASSWORD_LOCK_TIME");
+
 	/* CREATE/DROP RESOURCE GROUP */
 	else if (TailMatches("CREATE|DROP", "RESOURCE", "GROUP"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_resgroups);
@@ -3083,13 +3152,16 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("SELECT");
 
 /* CREATE MATERIALIZED VIEW */
-	else if (Matches("CREATE", "MATERIALIZED"))
+	else if (Matches("CREATE", "MATERIALIZED") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED"))
 		COMPLETE_WITH("VIEW");
-	/* Complete CREATE MATERIALIZED VIEW <name> with AS */
-	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny))
+	/* Complete CREATE MATERIALIZED VIEW <name> with AS  */
+	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny) ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny))
 		COMPLETE_WITH("AS");
 	/* Complete "CREATE MATERIALIZED VIEW <sth> AS with "SELECT" */
-	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "AS"))
+	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "AS") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny, "AS"))
 		COMPLETE_WITH("SELECT");
 
 /* CREATE EVENT TRIGGER */
@@ -3202,6 +3274,7 @@ psql_completion(const char *text, int start, int end)
 			 Matches("DROP", "EVENT", "TRIGGER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "DATA", "WRAPPER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "TABLE", MatchAny) ||
+			 Matches("DROP", "DIRECTORY", "TABLE", MatchAny) ||
 			 Matches("DROP", "TEXT", "SEARCH", "CONFIGURATION|DICTIONARY|PARSER|TEMPLATE", MatchAny))
 		COMPLETE_WITH("CASCADE", "RESTRICT");
 
@@ -3233,6 +3306,15 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("VIEW");
 	else if (Matches("DROP", "MATERIALIZED", "VIEW"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
+
+	/* DROP STORAGE */
+	else if (Matches("DROP", "STORAGE"))
+		COMPLETE_WITH("SERVER", "USER MAPPING");
+	/* DROP DIRECTORY TABLE */
+	else if (Matches("DROP", "DIRECTORY"))
+		COMPLETE_WITH("TABLE");
+	else if (Matches("DROP", "DIRECTORY", "TABLE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_directory_tables, NULL);
 
 	/* DROP OWNED BY */
 	else if (Matches("DROP", "OWNED"))
@@ -3394,6 +3476,10 @@ psql_completion(const char *text, int start, int end)
 /* FOREIGN SERVER */
 	else if (TailMatches("FOREIGN", "SERVER"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_servers);
+
+/* STORAGE SERVER */
+	else if (TailMatches("ALTER", "STORAGE", "SERVER"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_storage_servers);
 
 /*
  * GRANT and REVOKE are allowed inside CREATE SCHEMA and
@@ -3781,7 +3867,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("SECURITY", "LABEL", "ON") ||
 			 Matches("SECURITY", "LABEL", "FOR", MatchAny, "ON"))
 		COMPLETE_WITH("TABLE", "COLUMN", "AGGREGATE", "DATABASE", "DOMAIN",
-					  "EVENT TRIGGER", "FOREIGN TABLE", "FUNCTION",
+					  "EVENT TRIGGER", "FOREIGN TABLE", "DIRECTORY TABLE", "FUNCTION",
 					  "LARGE OBJECT", "MATERIALIZED VIEW", "LANGUAGE",
 					  "PUBLICATION", "PROCEDURE", "ROLE", "ROUTINE", "SCHEMA",
 					  "SEQUENCE", "SUBSCRIPTION", "TABLESPACE", "TYPE", "VIEW");
@@ -3972,6 +4058,19 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("SERVER");
 	else if (Matches("CREATE|ALTER", "USER", "MAPPING", "FOR", MatchAny, "SERVER", MatchAny))
 		COMPLETE_WITH("OPTIONS");
+/* STORAGE USER MAPPING */
+	else if (Matches("ALTER|CREATE|DROP", "STORAGE", "USER", "MAPPING"))
+		COMPLETE_WITH("FOR");
+	else if (Matches("CREATE", "STORAGE", "USER", "MAPPING", "FOR"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_roles
+							" UNION SELECT 'CURRENT_ROLE'"
+							" UNION SELECT 'CURRENT_USER'"
+	   						" UNION SELECT 'PUBLIC'"
+							" UNION SELECT 'USER'");
+	else if (Matches("CREATE|ALTER|DROP", "STORAGE", "USER", "MAPPING", "FOR", MatchAny))
+		COMPLETE_WITH("STORAGE SERVER");
+	else if (Matches("CREATE|ALTER", "STORAGE", "USER", "MAPPING", "FOR", MatchAny, "STORAGE", "SERVER", MatchAny))
+		COMPLETE_WITH("OPTIONS");
 
 /*
  * VACUUM [ ( option [, ...] ) ] [ table_and_columns [, ...] ]
@@ -4129,6 +4228,8 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_matviews, NULL);
 	else if (TailMatchesCS("\\dE*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_foreign_tables, NULL);
+	else if (TailMatchesCS("\\dY*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_directory_tables, NULL);
 	else if (TailMatchesCS("\\dy*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_event_triggers);
 
@@ -4167,6 +4268,8 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH("TRIGGER");
 		else if (TailMatches("CREATE|ALTER|DROP", "FOREIGN"))
 			COMPLETE_WITH("DATA WRAPPER", "TABLE");
+		else if (TailMatches("CREATE|ALTER|DROP", "DIRECTORY"))
+			COMPLETE_WITH("TABLE");
 		else if (TailMatches("ALTER", "LARGE"))
 			COMPLETE_WITH("OBJECT");
 		else if (TailMatches("CREATE|ALTER|DROP", "MATERIALIZED"))
@@ -4174,6 +4277,8 @@ psql_completion(const char *text, int start, int end)
 		else if (TailMatches("CREATE|ALTER|DROP", "TEXT"))
 			COMPLETE_WITH("SEARCH");
 		else if (TailMatches("CREATE|ALTER|DROP", "USER"))
+			COMPLETE_WITH("MAPPING FOR");
+		else if (TailMatches("CREATE|ALTER|DROP", "STORAGE", "USER"))
 			COMPLETE_WITH("MAPPING FOR");
 	}
 	else if (TailMatchesCS("\\h|\\help", MatchAny, MatchAny, MatchAny))
@@ -4183,6 +4288,8 @@ psql_completion(const char *text, int start, int end)
 		else if (TailMatches("CREATE|ALTER|DROP", "TEXT", "SEARCH"))
 			COMPLETE_WITH("CONFIGURATION", "DICTIONARY", "PARSER", "TEMPLATE");
 		else if (TailMatches("CREATE|ALTER|DROP", "USER", "MAPPING"))
+			COMPLETE_WITH("FOR");
+		else if (TailMatches("CREATE|ALTER|DROP", "STORAGE", "USER", "MAPPING"))
 			COMPLETE_WITH("FOR");
 	}
 	else if (TailMatchesCS("\\l*") && !TailMatchesCS("\\lo*"))

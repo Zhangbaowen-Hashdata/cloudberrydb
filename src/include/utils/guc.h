@@ -29,14 +29,6 @@
  */
 #define RESERVED_FTS_CONNECTIONS (1)
 
-
-/*
- * Automatic configuration file name for ALTER SYSTEM.
- * This file will be used to store values of configuration parameters
- * set by ALTER SYSTEM command.
- */
-#define PG_AUTOCONF_FILENAME		"postgresql.auto.conf"
-
 /* upper limit for GUC variables measured in kilobytes of memory */
 /* note that various places assume the byte size fits in a "long" variable */
 #if SIZEOF_SIZE_T > 4 && SIZEOF_LONG > 4
@@ -269,6 +261,7 @@ extern bool Debug_print_plan;
 extern bool Debug_print_parse;
 extern bool Debug_print_rewritten;
 extern bool Debug_pretty_print;
+extern bool Debug_print_ivm;
 
 extern bool	Debug_print_full_dtm;
 extern bool	Debug_print_snapshot_dtm;
@@ -299,6 +292,9 @@ extern bool gp_appendonly_compaction;
 extern bool enable_parallel;
 extern int  gp_appendonly_insert_files;
 extern int  gp_appendonly_insert_files_tuples_range;
+extern int  gp_random_insert_segments;
+extern bool enable_answer_query_using_materialized_views;
+extern bool enable_offload_entry_to_qe;
 /*
  * gp_enable_multiphase_limit is not cost based.
  * When set to false, the planner will not use multi-phase limit.
@@ -554,6 +550,7 @@ extern int optimizer_penalize_broadcast_threshold;
 extern double optimizer_cost_threshold;
 extern double optimizer_nestloop_factor;
 extern double optimizer_sort_factor;
+extern double optimizer_spilling_mem_threshold;
 
 /* Optimizer hints */
 extern int optimizer_array_expansion_threshold;
@@ -715,6 +712,7 @@ extern const char *GetConfigOptionResetString(const char *name);
 extern int	GetConfigOptionFlags(const char *name, bool missing_ok);
 extern void ProcessConfigFile(GucContext context);
 extern void InitializeGUCOptions(void);
+extern void InitializeWalConsistencyChecking(void);
 extern bool SelectConfigFiles(const char *userDoption, const char *progname);
 extern void ResetAllOptions(void);
 extern void AtStart_GUC(void);

@@ -20,6 +20,8 @@
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/dependency.h"
+#include "catalog/gp_storage_server.h"
+#include "catalog/gp_storage_user_mapping.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
@@ -36,6 +38,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_default_acl.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_directory_table.h"
 #include "catalog/pg_event_trigger.h"
 #include "catalog/pg_extension.h"
 #include "catalog/pg_foreign_data_wrapper.h"
@@ -94,6 +97,8 @@
 #include "commands/tablespace.h"
 #include "cdb/cdbvars.h"
 #include "commands/extprotocolcmds.h"
+#include "catalog/pg_profile.h"
+#include "catalog/pg_password_history.h"
 #include "commands/tablecmds.h"
 
 
@@ -198,6 +203,11 @@ static const Oid object_classes[] = {
 	TransformRelationId,		/* OCLASS_TRANSFORM */
 
 	/* GPDB additions */
+	ProfileRelationId,		/* OCLASS_PROFILE */
+	PasswordHistoryRelationId,	/* OCLASS_PASSWORDHISTORY */
+	DirectoryTableRelationId,	/* OCLASS_DIRECTORY_TABLE */
+	StorageServerRelationId,	/* OCLASS_STORAGE_SERVER */
+	StorageUserMappingRelationId,	/* OCLASS_STORAGE_USER_MAPPING */
 	ExtprotocolRelationId,		/* OCLASS_EXTPROTOCOL */
 	TaskRelationId				/* OCLASS_TASK */
 };
@@ -1573,13 +1583,26 @@ doDeletion(const ObjectAddress *object, int flags)
 		case OCLASS_DATABASE:
 		case OCLASS_TBLSPACE:
 		case OCLASS_SUBSCRIPTION:
+		case OCLASS_PROFILE:
+		case OCLASS_PASSWORDHISTORY:
+		case OCLASS_STORAGE_SERVER:
+		case OCLASS_STORAGE_USER_MAPPING:
 			elog(ERROR, "global objects cannot be deleted by doDeletion");
 			break;
 
+		default:
+		{
+			struct CustomObjectClass *coc;
+
+			coc = find_custom_object_class_by_classid(object->classId, false);
+			if (coc->do_delete)
+				coc->do_delete(coc, object, flags);
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
 			 */
+			break;
+		}
 	}
 }
 
@@ -2931,6 +2954,12 @@ getObjectClass(const ObjectAddress *object)
 			Assert(object->objectSubId == 0);
 			return OCLASS_EXTPROTOCOL;
 
+		case ProfileRelationId:
+			return OCLASS_PROFILE;
+
+		case PasswordHistoryRelationId:
+			return OCLASS_PASSWORDHISTORY;
+
 		case PolicyRelationId:
 			return OCLASS_POLICY;
 
@@ -2948,6 +2977,24 @@ getObjectClass(const ObjectAddress *object)
 
 		case TaskRelationId:
 			return OCLASS_TASK;
+
+		case DirectoryTableRelationId:
+			return OCLASS_DIRTABLE;
+
+		case StorageServerRelationId:
+			return OCLASS_STORAGE_SERVER;
+
+		case StorageUserMappingRelationId:
+			return OCLASS_STORAGE_USER_MAPPING;
+
+		default:
+		{
+			struct CustomObjectClass *coc;
+			coc = find_custom_object_class_by_classid(object->classId, true);
+			if (coc)
+				return coc->oclass;
+			break;
+		}
 	}
 
 	/* shouldn't get here */
@@ -3084,4 +3131,68 @@ DeleteInitPrivs(const ObjectAddress *object)
 	systable_endscan(scan);
 
 	table_close(relation, RowExclusiveLock);
+}
+
+/* Custom object class */
+#define FIRST_COSTOM_OBJECT_CLASS  512
+static List *custom_object_class_list = NIL;
+
+/*
+ * don't support unregister object class in a session.
+ * Return: the oclass allocated by the kernel
+ */
+int
+register_custom_object_class(struct CustomObjectClass *coc)
+{
+	MemoryContext saved_ctx;
+	/* check class_id and required callbacks */
+	Assert(OidIsValid(coc->class_id));
+	Assert(coc->do_delete);
+
+	if (find_custom_object_class_by_classid(coc->class_id, true))
+		elog(ERROR, "class_id %u exists already", coc->class_id);
+
+	coc->oclass = FIRST_COSTOM_OBJECT_CLASS + list_length(custom_object_class_list);
+	saved_ctx = MemoryContextSwitchTo(TopMemoryContext);
+	custom_object_class_list = lappend(custom_object_class_list, coc);
+	MemoryContextSwitchTo(saved_ctx);
+	return coc->oclass;
+}
+
+struct CustomObjectClass *
+find_custom_object_class(int oclass)
+{
+	int index = oclass - FIRST_COSTOM_OBJECT_CLASS;
+
+	if (oclass < FIRST_COSTOM_OBJECT_CLASS)
+		elog(ERROR, "unexpected oclass, found builtin one %u", oclass);
+	if (index >= list_length(custom_object_class_list))
+		elog(ERROR, "unexpected oclass beyond custom object class %u", oclass);
+
+	return (struct CustomObjectClass *) list_nth(custom_object_class_list, index);
+}
+
+struct CustomObjectClass *
+find_custom_object_class_by_classid(Oid class_id, bool missing_ok)
+{
+	ListCell *lc;
+
+#ifdef USE_ASSERT_CHECKING
+	int n = lengthof(object_classes);
+	Assert(n < FIRST_COSTOM_OBJECT_CLASS);
+
+	for (int i = 0; i < n; i++) {
+		if (object_classes[i] == class_id)
+			elog(ERROR, "find builtin object class by class id %u", class_id);
+	}
+#endif
+
+	foreach(lc, custom_object_class_list) {
+		struct CustomObjectClass *coc = (struct CustomObjectClass *)lfirst(lc);
+		if (coc->class_id == class_id)
+		  return coc;
+	}
+	if (!missing_ok)
+		ereport(ERROR, (errmsg("found no custom object class for class_id=%u", class_id)));
+	return NULL;
 }

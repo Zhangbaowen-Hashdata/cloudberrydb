@@ -99,6 +99,8 @@
 #include "cdb/cdboidsync.h"
 #include "utils/faultinjector.h"
 
+/* GUC variables */
+char       *default_index_access_method = DEFAULT_INDEX_TYPE;
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_index_pg_class_oid = InvalidOid;
 
@@ -1071,6 +1073,7 @@ index_create_internal(Relation heapRelation,
 	indexRelation->rd_rel->relowner = heapRelation->rd_rel->relowner;
 	indexRelation->rd_rel->relam = accessMethodObjectId;
 	indexRelation->rd_rel->relispartition = OidIsValid(parentIndexRelid);
+	indexRelation->rd_rel->relisivm = false;
 
 	/*
 	 * store index's pg_class entry
@@ -1101,6 +1104,7 @@ index_create_internal(Relation heapRelation,
 			case PG_TOAST_NAMESPACE:
 			case PG_BITMAPINDEX_NAMESPACE:
 			case PG_AOSEGMENT_NAMESPACE:
+			case PG_EXTAUX_NAMESPACE:
 				doIt = false;
 				break;
 			default:
@@ -2808,7 +2812,7 @@ BuildSpeculativeIndexInfo(Relation index, IndexInfo *ii)
 	 */
 	Assert(ii->ii_Unique);
 
-	if (index->rd_rel->relam != BTREE_AM_OID)
+	if (!IsIndexAccessMethod(index->rd_rel->relam, BTREE_AM_OID))
 		elog(ERROR, "unexpected non-btree speculative unique index");
 
 	ii->ii_UniqueOps = (Oid *) palloc(sizeof(Oid) * indnkeyatts);
@@ -3122,9 +3126,14 @@ index_build(Relation heapRelation,
 	 * only btree has support for parallel builds.
 	 *
 	 * Note that planner considers parallel safety for us.
+	 *
+	 * SINGLENODE_FIXME: Disable parallel index building for now.
+	 * Parallel is not supported for singlenode currently, but it can still use
+	 * parallel index while creating table. In the future, it should be considered
+	 * to introduce parallelism to singlenode mode.
 	 */
-	if (parallel && IsNormalProcessingMode() &&
-		indexRelation->rd_rel->relam == BTREE_AM_OID)
+	if (parallel && !IS_SINGLENODE() && IsNormalProcessingMode() &&
+		IsIndexAccessMethod(indexRelation->rd_rel->relam, BTREE_AM_OID))
 		indexInfo->ii_ParallelWorkers =
 			plan_create_index_workers(RelationGetRelid(heapRelation),
 									  RelationGetRelid(indexRelation));
@@ -4003,6 +4012,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 			case PG_TOAST_NAMESPACE:
 			case PG_BITMAPINDEX_NAMESPACE:
 			case PG_AOSEGMENT_NAMESPACE:
+			case PG_EXTAUX_NAMESPACE:
 				doIt = false;
 				break;
 			default:

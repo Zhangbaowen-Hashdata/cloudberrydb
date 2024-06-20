@@ -23,7 +23,6 @@ MOCK_LIBS := -ldl $(filter-out -ledit, $(LIBS)) $(LDAP_LIBS_BE) $(ICU_LIBS) $(ZS
 # These files are not linked into test programs.
 EXCL_OBJS=\
 	src/backend/main/main.o \
-	src/backend/access/transam/rmgr.o \
 	src/backend/utils/fmgrtab.o \
 	src/backend/gpopt/%.o \
 	src/backend/gpopt/config/%.o \
@@ -38,9 +37,6 @@ EXCL_OBJS=\
 # of the test programs. Feel free to link them back (i.e. remove them from
 # this exclusion list) as needed.
 EXCL_OBJS+=\
-	src/backend/access/hash/hash.o \
-	src/backend/access/hash/hashsearch.o \
-	\
 	src/backend/utils/adt/cash.o \
 	src/backend/utils/adt/char.o \
 	src/backend/utils/adt/complex_type.o \
@@ -87,7 +83,6 @@ EXCL_OBJS+=\
 # These files are linked into every test program.
 MOCK_OBJS=\
 	$(top_srcdir)/src/test/unit/mock/fmgrtab_mock.o \
-	$(top_srcdir)/src/test/unit/mock/rmgr_mock.o \
 	$(top_srcdir)/src/test/unit/mock/main_mock.o
 # No test programs currently exercise the ORCA translator library, so
 # mock that instead of linking with the real library.

@@ -19,6 +19,7 @@
 
 #include <math.h>
 
+#include "access/amapi.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/extensible.h"
@@ -1124,7 +1125,7 @@ create_index_path(PlannerInfo *root,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
 	/* GPDB_12_MERGE_FEATURE_NOT_SUPPORTED: the parallel StreamBitmap scan is not implemented */
-	pathnode->path.parallel_safe = rel->consider_parallel && (index->relam != BITMAP_AM_OID);
+	pathnode->path.parallel_safe = rel->consider_parallel && !IsIndexAccessMethod(index->relam, BITMAP_AM_OID);
 	pathnode->path.parallel_workers = 0;
 	pathnode->path.pathkeys = pathkeys;
 
@@ -3456,16 +3457,12 @@ create_namedtuplestorescan_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->parallel_safe = rel->consider_parallel;
 	pathnode->parallel_workers = 0;
 	pathnode->pathkeys = NIL;	/* result is always unordered */
-
-	cost_namedtuplestorescan(pathnode, root, rel, pathnode->param_info);
-
 	/*
-	 * When this is used in triggers that run on QEs, the locus is ignored
-	 * and the scan is executed locally on the QE anyway. On QD, it's not
-	 * clear if named tuplestores are populated correctly in triggers, but if
-	 * it does work t all, Entry seems most appropriate.
+	 * When this is used in triggers that run on QEs, the locus is should
+	 * follow the distribution of base relation.
 	 */
-	CdbPathLocus_MakeEntry(&pathnode->locus);
+	pathnode->locus = cdbpathlocus_from_baserel(root, rel, 0);
+	cost_namedtuplestorescan(pathnode, root, rel, pathnode->param_info);
 
 	return pathnode;
 }
@@ -3642,13 +3639,18 @@ create_foreignscan_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.total_cost = total_cost;
 	pathnode->path.pathkeys = pathkeys;
 
+	ForeignServer *server = NULL;
 	switch (rel->exec_location)
 	{
 		case FTEXECLOCATION_ANY:
 			CdbPathLocus_MakeGeneral(&(pathnode->path.locus));
 			break;
 		case FTEXECLOCATION_ALL_SEGMENTS:
-			CdbPathLocus_MakeStrewn(&(pathnode->path.locus), rel->num_segments, 0);
+			server = GetForeignServer(rel->serverid);
+			if (server)
+				CdbPathLocus_MakeStrewn(&(pathnode->path.locus), server->num_segments, 0);
+			else
+				CdbPathLocus_MakeStrewn(&(pathnode->path.locus), getgpsegmentCount(), 0);
 			break;
 		case FTEXECLOCATION_COORDINATOR:
 			CdbPathLocus_MakeEntry(&(pathnode->path.locus));
@@ -3707,13 +3709,18 @@ create_foreign_join_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.total_cost = total_cost;
 	pathnode->path.pathkeys = pathkeys;
 
+	ForeignServer *server = NULL;
 	switch (rel->exec_location)
 	{
 		case FTEXECLOCATION_ANY:
 			CdbPathLocus_MakeGeneral(&(pathnode->path.locus));
 			break;
 		case FTEXECLOCATION_ALL_SEGMENTS:
-			CdbPathLocus_MakeStrewn(&(pathnode->path.locus), rel->num_segments, 0);
+			server = GetForeignServer(rel->serverid);
+			if (server)
+				CdbPathLocus_MakeStrewn(&(pathnode->path.locus), server->num_segments, 0);
+			else
+				CdbPathLocus_MakeStrewn(&(pathnode->path.locus), getgpsegmentCount(), 0);
 			break;
 		case FTEXECLOCATION_COORDINATOR:
 			CdbPathLocus_MakeEntry(&(pathnode->path.locus));
@@ -6003,23 +6010,6 @@ adjust_modifytable_subpath(PlannerInfo *root, CmdType operation,
 	 * we could mark the ModifyTable with the same distribution key. However,
 	 * currently, because a ModifyTable node can only be at the top of the
 	 * plan, it won't make any difference to the overall plan.
-	 *
-	 * GPDB_96_MERGE_FIXME: it might with e.g. a INSERT RETURNING in a CTE
-	 * I tried here, the locus setting is quite simple, but failed if it's not
-	 * in a CTE and the locus is General. Haven't figured out how to create
-	 * flow in that case.
-	 * Example:
-	 * CREATE TABLE cte_returning_locus(c1 int) DISTRIBUTED BY (c1);
-	 * COPY cte_returning_locus FROM PROGRAM 'seq 1 100';
-	 * EXPLAIN WITH aa AS (
-	 *        INSERT INTO cte_returning_locus SELECT generate_series(3,300) RETURNING c1
-	 * )
-	 * SELECT count(*) FROM aa,cte_returning_locus WHERE aa.c1 = cte_returning_locus.c1;
-	 *
-	 * The returning doesn't need a motion to be hash joined, works fine. But
-	 * without the WITH, what is the proper flow? FLOW_SINGLETON returns
-	 * nothing, FLOW_PARTITIONED without hashExprs(General locus has no
-	 * distkeys) returns duplication.
 	 *
 	 * GPDB_90_MERGE_FIXME: I've hacked a basic implementation of the above for
 	 * the case where all the subplans are POLICYTYPE_ENTRY, but it seems like

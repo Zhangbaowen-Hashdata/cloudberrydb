@@ -566,6 +566,9 @@ _readIntoClause(void)
 	READ_NODE_FIELD(viewQuery);
 	READ_BOOL_FIELD(skipData);
 	READ_NODE_FIELD(distributedBy);
+	READ_BOOL_FIELD(ivm);
+	READ_OID_FIELD(matviewOid);
+	READ_STRING_FIELD(enrname);
 
 	READ_DONE();
 }
@@ -1440,6 +1443,7 @@ _readRangeTblEntry(void)
 	READ_NODE_FIELD(alias);
 	READ_NODE_FIELD(eref);
 	READ_ENUM_FIELD(rtekind, RTEKind);
+	READ_BOOL_FIELD(relisivm);
 
 	switch (local_node->rtekind)
 	{
@@ -2270,6 +2274,7 @@ _readHashJoin(void)
 	READ_NODE_FIELD(hashkeys);
 	READ_NODE_FIELD(hashqualclauses);
 	READ_BOOL_FIELD(batch0_barrier);
+	READ_BOOL_FIELD(outer_motionhazard);
 
 	READ_DONE();
 }
@@ -3124,6 +3129,8 @@ parseNodeString(void)
 		return_value = _readAlterSystemStmt();
 	else if (MATCHX("ALTERROLESTMT"))
 		return_value = _readAlterRoleStmt();
+	else if (MATCHX("ALTERPROFILESTMT"))
+		return_value = _readAlterProfileStmt();
 	else if (MATCHX("ALTERSEQSTMT"))
 		return_value = _readAlterSeqStmt();
 	else if (MATCHX("ALTERTABLECMD"))
@@ -3192,6 +3199,8 @@ parseNodeString(void)
 		return_value = _readCreatePolicyStmt();
 	else if (MATCHX("CREATEROLESTMT"))
 		return_value = _readCreateRoleStmt();
+	else if (MATCHX("CREATEPROFILESTMT"))
+		return_value = _readCreateProfileStmt();
 	else if (MATCHX("CREATESCHEMASTMT"))
 		return_value = _readCreateSchemaStmt();
 	else if (MATCHX("CREATESEQSTMT"))
@@ -3212,6 +3221,8 @@ parseNodeString(void)
 		return_value = _readDropdbStmt();
 	else if (MATCHX("DROPROLESTMT"))
 		return_value = _readDropRoleStmt();
+	else if (MATCHX("DROPPROFILESTMT"))
+		return_value = _readDropProfileStmt();
 	else if (MATCHX("DROPSTMT"))
 		return_value = _readDropStmt();
 	else if (MATCHX("DISTRIBUTIONKEYELEM"))

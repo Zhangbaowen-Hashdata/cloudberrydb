@@ -80,6 +80,7 @@ extern Result *make_result(List *tlist, Node *resconstantqual, Plan *subplan);
 extern Plan *add_sort_cost(PlannerInfo *root, Plan *input, 
 						   double limit_tuples);
 extern Plan *plan_pushdown_tlist(PlannerInfo *root, Plan *plan, List *tlist);      /*CDB*/
+extern Plan *offload_entry_to_qe(PlannerInfo *root, Plan *plan, int sendslice_parallel); /* CBDB */
 
 /* External use of these functions is deprecated: */
 extern Sort *make_sort_from_sortclauses(List *sortcls,
@@ -164,5 +165,10 @@ extern bool extract_query_dependencies_walker(Node *node, PlannerInfo *root);
 extern void cdb_extract_plan_dependencies(PlannerInfo *root, Plan *plan);
 
 extern void add_proc_oids_for_dump(Oid funcid);
+
+extern RelOptInfo* answer_query_using_materialized_views(PlannerInfo *root,
+														RelOptInfo *current_rel,
+														query_pathkeys_callback qp_callback,
+														void *qp_extra);
 
 #endif							/* PLANMAIN_H */

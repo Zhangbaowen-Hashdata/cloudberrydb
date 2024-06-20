@@ -66,7 +66,7 @@ using namespace gpos;
 
 void debug_gpos_assert(const char *filename, long line, const char *msg)
 {
-	elog(LOG, "[debug_gpos_assert]: '%s':%ld  %s", filename, line, msg);
+	elog(DEBUG1, "[debug_gpos_assert]: '%s':%ld  %s", filename, line, msg);
 }
 
 bool
@@ -1717,7 +1717,7 @@ gpdb::NumericIsNan(Numeric num)
 {
 	GP_WRAP_START;
 	{
-		return numeric_is_nan(num);
+		return NUMERIC_IS_NAN(num);
 	}
 	GP_WRAP_END;
 	return false;

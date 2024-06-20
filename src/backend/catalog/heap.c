@@ -60,6 +60,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_directory_table.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
@@ -70,6 +71,7 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "catalog/storage_directory_table.h"
 #include "catalog/storage_xlog.h"
 #include "commands/tablecmds.h"
 #include "commands/typecmds.h"
@@ -368,6 +370,7 @@ heap_create(const char *relname,
 	if (!allow_system_table_mods &&
 		((IsCatalogNamespace(relnamespace) && relkind != RELKIND_INDEX) ||
 		 IsToastNamespace(relnamespace) ||
+		 IsExtAuxNamespace(relnamespace) ||
 		 IsAoSegmentNamespace(relnamespace)) &&
 		IsNormalProcessingMode())
 		ereport(ERROR,
@@ -484,6 +487,7 @@ heap_create(const char *relname,
 			case RELKIND_RELATION:
 			case RELKIND_TOASTVALUE:
 			case RELKIND_MATVIEW:
+			case RELKIND_DIRECTORY_TABLE:
 				table_relation_set_new_filenode(rel, &rel->rd_node,
 												relpersistence,
 												relfrozenxid, relminmxid);
@@ -1306,6 +1310,7 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_relrewrite - 1] = ObjectIdGetDatum(rd_rel->relrewrite);
 	values[Anum_pg_class_relfrozenxid - 1] = TransactionIdGetDatum(rd_rel->relfrozenxid);
 	values[Anum_pg_class_relminmxid - 1] = MultiXactIdGetDatum(rd_rel->relminmxid);
+	values[Anum_pg_class_relisivm - 1] = BoolGetDatum(rd_rel->relisivm);
 	if (relacl != (Datum) 0)
 		values[Anum_pg_class_relacl - 1] = relacl;
 	else
@@ -1363,6 +1368,7 @@ AddNewRelationTuple(Relation pg_class_desc,
 		case RELKIND_AOSEGMENTS:
 		case RELKIND_AOBLOCKDIR:
 		case RELKIND_AOVISIMAP:
+		case RELKIND_DIRECTORY_TABLE:
 			/* The relation is real, but as yet empty */
 			new_rel_reltup->relpages = 0;
 			new_rel_reltup->reltuples = -1;
@@ -1597,6 +1603,7 @@ heap_create_with_catalog(const char *relname,
 			case RELKIND_MATVIEW:
 			case RELKIND_FOREIGN_TABLE:
 			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_DIRECTORY_TABLE:
 				relacl = get_user_default_acl(OBJECT_TABLE, ownerid,
 											  relnamespace);
 				break;
@@ -1652,6 +1659,10 @@ heap_create_with_catalog(const char *relname,
 	 * NAMEDATALEN and gets truncated. Then the name may same with other child
 	 * table's.
 	 *
+	 * Auxiliary relations in pg_ext_aux don't need array type. Relations in
+	 * pg_ext_aux are assumed simple relation, their array types are unexpected
+	 * to be used in the extension code.
+	 *
 	 * The below code is different from upstream since we preassign type
 	 * OID first on QD and use the name as key to retrieve the pre-assigned
 	 * OID from QE.
@@ -1662,8 +1673,12 @@ heap_create_with_catalog(const char *relname,
 		  relkind == RELKIND_PARTITIONED_INDEX ||
 		  relkind == RELKIND_AOSEGMENTS ||
 		  relkind == RELKIND_AOBLOCKDIR ||
-		  relkind == RELKIND_AOVISIMAP) &&
-		relnamespace != PG_BITMAPINDEX_NAMESPACE)
+		  relkind == RELKIND_AOVISIMAP ||
+		  relnamespace == PG_BITMAPINDEX_NAMESPACE ||
+		  (relnamespace == PG_EXTAUX_NAMESPACE &&
+		   (relkind == RELKIND_RELATION ||
+			relkind == RELKIND_VIEW ||
+			relkind == RELKIND_MATVIEW))))
 	{
 		/* OK, so pre-assign a type OID for the array type */
 		Oid			new_array_oid;
@@ -1842,6 +1857,7 @@ heap_create_with_catalog(const char *relname,
 		 * main table depends on it.
 		 */
 		if (relkind == RELKIND_RELATION ||
+			relkind == RELKIND_DIRECTORY_TABLE ||
 			relkind == RELKIND_MATVIEW)
 		{
 			ObjectAddressSet(referenced, AccessMethodRelationId, accessmtd);
@@ -1884,6 +1900,7 @@ heap_create_with_catalog(const char *relname,
 
 		Assert(relkind == RELKIND_RELATION ||
 			   relkind == RELKIND_PARTITIONED_TABLE ||
+			   relkind == RELKIND_DIRECTORY_TABLE ||
 			   relkind == RELKIND_MATVIEW ||
 			   relkind == RELKIND_FOREIGN_TABLE);
 
@@ -1915,6 +1932,9 @@ heap_create_with_catalog(const char *relname,
 			case RELKIND_MATVIEW:
 				subtyp = "MATVIEW";
 				break;
+			case RELKIND_DIRECTORY_TABLE:
+				subtyp = "DIRECTORY TABLE";
+				break;
 			default:
 				doIt = false;
 		}
@@ -1933,6 +1953,7 @@ heap_create_with_catalog(const char *relname,
 			case PG_TOAST_NAMESPACE:
 			case PG_BITMAPINDEX_NAMESPACE:
 			case PG_AOSEGMENT_NAMESPACE:
+			case PG_EXTAUX_NAMESPACE:
 				doIt = false;
 				break;
 			default:
@@ -2458,6 +2479,15 @@ heap_drop_with_catalog(Oid relid)
 		update_default_partition_oid(parentOid, InvalidOid);
 
 	/*
+	 * Remove entry in pg_directory_table
+	 */
+	if (rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE)
+	{
+		RemoveDirectoryTableEntry(relid);
+		DirectoryTableDropStorage(rel);
+	}
+
+	/*
 	 * Schedule unlinking of the relation's physical files at commit.
 	 */
 	if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
@@ -2469,6 +2499,7 @@ heap_drop_with_catalog(Oid relid)
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_MATVIEW ||
 		rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+		rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		GpPolicyRemove(relid);
@@ -2478,6 +2509,7 @@ heap_drop_with_catalog(Oid relid)
 	 * Attribute encoding
 	 */
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE ||
 		rel->rd_rel->relkind == RELKIND_MATVIEW ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{

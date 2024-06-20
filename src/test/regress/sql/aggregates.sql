@@ -434,6 +434,9 @@ drop table minmaxtest cascade;
 -- check for correct detection of nested-aggregate errors
 select max(min(unique1)) from tenk1;
 select (select max(min(unique1)) from int8_tbl) from tenk1;
+select avg((select avg(a1.col1 order by (select avg(a2.col2) from tenk1 a3))
+            from tenk1 a1(col1)))
+from tenk1 a2(col2);
 
 --
 -- Test removal of redundant GROUP BY columns
@@ -1100,6 +1103,8 @@ create aggregate my_avg_init2(int4)
    initcond = '(4,0)'
 );
 
+-- reset the plan cache, sometimes it would re-plan these prepared statements and log ORCA fallbacks
+discard plans;
 -- state should be shared if INITCONDs are matching
 select my_sum_init(one),my_avg_init(one) from (values(1),(3)) t(one);
 

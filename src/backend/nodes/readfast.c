@@ -758,6 +758,7 @@ _readCreateStmt_common(CreateStmt *local_node)
 		   local_node->relKind == RELKIND_COMPOSITE_TYPE ||
 		   local_node->relKind == RELKIND_FOREIGN_TABLE ||
 		   local_node->relKind == RELKIND_MATVIEW ||
+		   local_node->relKind == RELKIND_DIRECTORY_TABLE ||
 		   IsAppendonlyMetadataRelkind(local_node->relKind));
 	Assert(local_node->oncommit <= ONCOMMIT_DROP);
 }
@@ -818,6 +819,7 @@ _readCopyStmt(void)
 	READ_BOOL_FIELD(is_from);
 	READ_BOOL_FIELD(is_program);
 	READ_STRING_FIELD(filename);
+	READ_STRING_FIELD(dirfilename);
 	READ_NODE_FIELD(options);
 	READ_NODE_FIELD(sreh);
 
@@ -837,6 +839,11 @@ _readQueryDispatchDesc(void)
 	READ_STRING_FIELD(parallelCursorName);
 	READ_BOOL_FIELD(useChangedAOOpts);
 	READ_INT_FIELD(secContext);
+	READ_NODE_FIELD(namedRelList);
+	READ_OID_FIELD(matviewOid);
+	READ_OID_FIELD(tableid);
+	READ_INT_FIELD(snaplen);
+	READ_STRING_FIELD(snapname);
 	READ_DONE();
 }
 
@@ -980,7 +987,7 @@ _readMotion(void)
 		   local_node->motionType == MOTIONTYPE_GATHER_SINGLE ||
 		   local_node->motionType == MOTIONTYPE_HASH ||
 		   local_node->motionType == MOTIONTYPE_BROADCAST ||
-		   local_node->motionType == MOTIONTYPE_PARALLEL_BROADCAST ||
+		   local_node->motionType == MOTIONTYPE_BROADCAST_WORKERS ||
 		   local_node->motionType == MOTIONTYPE_EXPLICIT);
 
 	READ_BOOL_FIELD(sendSorted);
@@ -1098,6 +1105,7 @@ _readCreateTrigStmt(void)
 	READ_BOOL_FIELD(deferrable);
 	READ_BOOL_FIELD(initdeferred);
 	READ_NODE_FIELD(constrrel);
+	READ_OID_FIELD(matviewId);
 
 	READ_DONE();
 }
@@ -1123,6 +1131,7 @@ _readCreateTableSpaceStmt(void)
 	READ_NODE_FIELD(owner);
 	READ_STRING_FIELD(location);
 	READ_NODE_FIELD(options);
+	READ_STRING_FIELD(filehandler);
 
 	READ_DONE();
 }
@@ -1441,6 +1450,39 @@ _readAlterForeignServerStmt(void)
 	READ_DONE();
 }
 
+static CreateStorageServerStmt *
+_readCreateStorageServerStmt(void)
+{
+	READ_LOCALS(CreateStorageServerStmt);
+
+	READ_STRING_FIELD(servername);
+	READ_NODE_FIELD(options);
+
+	READ_DONE();
+}
+
+static AlterStorageServerStmt *
+_readAlterStorageServerStmt(void)
+{
+	READ_LOCALS(AlterStorageServerStmt);
+
+	READ_STRING_FIELD(servername);
+	READ_NODE_FIELD(options);
+
+	READ_DONE();
+}
+
+static DropStorageServerStmt *
+_readDropStorageServerStmt(void)
+{
+	READ_LOCALS(DropStorageServerStmt);
+
+	READ_STRING_FIELD(servername);
+	READ_BOOL_FIELD(missing_ok);
+
+	READ_DONE();
+}
+
 static CreateUserMappingStmt *
 _readCreateUserMappingStmt(void)
 {
@@ -1469,6 +1511,42 @@ static DropUserMappingStmt *
 _readDropUserMappingStmt(void)
 {
 	READ_LOCALS(DropUserMappingStmt);
+
+	READ_NODE_FIELD(user);
+	READ_STRING_FIELD(servername);
+	READ_BOOL_FIELD(missing_ok);
+
+	READ_DONE();
+}
+
+static CreateStorageUserMappingStmt *
+_readCreateStorageUserMappingStmt(void)
+{
+	READ_LOCALS(CreateStorageUserMappingStmt);
+
+	READ_NODE_FIELD(user);
+	READ_STRING_FIELD(servername);
+	READ_NODE_FIELD(options);
+
+	READ_DONE();
+}
+
+static AlterStorageUserMappingStmt *
+_readAlterStorageUserMappingStmt(void)
+{
+	READ_LOCALS(AlterStorageUserMappingStmt);
+
+	READ_NODE_FIELD(user);
+	READ_STRING_FIELD(servername);
+	READ_NODE_FIELD(options);
+
+	READ_DONE();
+}
+
+static DropStorageUserMappingStmt *
+_readDropStorageUserMappingStmt(void)
+{
+	READ_LOCALS(DropStorageUserMappingStmt);
 
 	READ_NODE_FIELD(user);
 	READ_STRING_FIELD(servername);
@@ -1632,6 +1710,50 @@ _readCreateStatsStmt(void)
 	READ_STRING_FIELD(stxcomment);
 	READ_BOOL_FIELD(transformed);
 	READ_BOOL_FIELD(if_not_exists);
+
+	READ_DONE();
+}
+
+static CreateDirectoryTableStmt *
+_readCreateDirectoryTableStmt(void)
+{
+	READ_LOCALS(CreateDirectoryTableStmt);
+
+	_readCreateStmt_common(&local_node->base);
+
+	READ_STRING_FIELD(tablespacename);
+
+	READ_DONE();
+}
+
+static EphemeralNamedRelationInfo *
+_readEphemeralNamedRelationInfo(void)
+{
+	READ_LOCALS(EphemeralNamedRelationInfo);
+
+	READ_STRING_FIELD(name);
+	READ_OID_FIELD(reliddesc);
+	READ_INT_FIELD(natts);
+
+	local_node->tuple = CreateTemplateTupleDesc(local_node->natts);
+
+	READ_INT_FIELD(tuple->natts);
+	if (local_node->tuple->natts > 0)
+	{
+		int i = 0;
+		for (; i < local_node->tuple->natts; i++)
+		{
+			memcpy(&local_node->tuple->attrs[i], read_str_ptr, ATTRIBUTE_FIXED_PART_SIZE);
+			read_str_ptr+=ATTRIBUTE_FIXED_PART_SIZE;
+		}
+	}
+
+	READ_OID_FIELD(tuple->tdtypeid);
+	READ_INT_FIELD(tuple->tdtypmod);
+	READ_INT_FIELD(tuple->tdrefcount);
+
+	READ_ENUM_FIELD(enrtype, EphemeralNameRelationType);
+	READ_FLOAT_FIELD(enrtuples);
 
 	READ_DONE();
 }
@@ -2247,6 +2369,16 @@ readNodeBinary(void)
 				return_value = _readAlterRoleSetStmt();
 				break;
 
+			case T_CreateProfileStmt:
+				return_value = _readCreateProfileStmt();
+				break;
+			case T_AlterProfileStmt:
+				return_value = _readAlterProfileStmt();
+				break;
+			case T_DropProfileStmt:
+				return_value = _readDropProfileStmt();
+				break;
+
 			case T_AlterObjectDependsStmt:
 				return_value = _readAlterObjectDependsStmt();
 				break;
@@ -2525,6 +2657,15 @@ readNodeBinary(void)
 			case T_CreateUserMappingStmt:
 				return_value = _readCreateUserMappingStmt();
 				break;
+			case T_CreateStorageUserMappingStmt:
+				return_value = _readCreateStorageUserMappingStmt();
+				break;
+			case T_AlterStorageUserMappingStmt:
+				return_value = _readAlterStorageUserMappingStmt();
+				break;
+			case T_DropStorageUserMappingStmt:
+				return_value = _readDropStorageUserMappingStmt();
+				break;
 			case T_AlterForeignServerStmt:
 				return_value = _readAlterForeignServerStmt();
 				break;
@@ -2533,6 +2674,15 @@ readNodeBinary(void)
 				break;
 			case T_AlterFdwStmt:
 				return_value = _readAlterFdwStmt();
+				break;
+			case T_CreateStorageServerStmt:
+				return_value = _readCreateStorageServerStmt();
+				break;
+			case T_AlterStorageServerStmt:
+				return_value = _readAlterStorageServerStmt();
+				break;
+			case T_DropStorageServerStmt:
+				return_value = _readDropStorageServerStmt();
 				break;
 			case T_CreateFdwStmt:
 				return_value = _readCreateFdwStmt();
@@ -2619,6 +2769,12 @@ readNodeBinary(void)
 				break;
 			case T_StatsElem:
 				return_value = _readStatsElem();
+				break;
+			case T_EphemeralNamedRelationInfo:
+				return_value = _readEphemeralNamedRelationInfo();
+				break;
+			case T_CreateDirectoryTableStmt:
+				return_value = _readCreateDirectoryTableStmt();
 				break;
 			default:
 				return_value = NULL; /* keep the compiler silent */

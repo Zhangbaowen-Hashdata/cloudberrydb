@@ -8,6 +8,8 @@ TODO: docs!
 """
 import json
 import os, time
+import base64
+import pickle
 import shlex
 import os.path
 import pipes
@@ -1101,7 +1103,7 @@ class GpConfigHelper(Command):
 
         addParameter = (not getParameter) and (not removeParameter)
         if addParameter:
-            args = "--add-parameter %s --value %s " % (name, shlex.quote(value))
+            args = "--add-parameter %s --value %s " % (name, base64.urlsafe_b64encode(pickle.dumps(value)).decode())
         if getParameter:
             args = "--get-parameter %s" % name
         if removeParameter:
@@ -1115,7 +1117,8 @@ class GpConfigHelper(Command):
 
     # FIXME: figure out how callers of this can handle exceptions here
     def get_value(self):
-        return self.get_results().stdout
+        raw_value = self.get_results().stdout
+        return pickle.loads(base64.urlsafe_b64decode(raw_value))
 
 
 #-----------------------------------------------
@@ -1166,8 +1169,8 @@ def distribute_tarball(queue,list,tarball):
             hostname = db.getSegmentHostName()
             datadir = db.getSegmentDataDirectory()
             (head,tail)=os.path.split(datadir)
-            scp_cmd=Scp(name="copy coordinator",srcFile=tarball,dstHost=hostname,dstFile=head)
-            queue.addCommand(scp_cmd)
+            rsync_cmd=Rsync(name="copy coordinator",srcFile=tarball,dstHost=hostname,dstFile=head)
+            queue.addCommand(rsync_cmd)
         queue.join()
         queue.check_results()
         logger.debug("distributeTarBall finished")
@@ -1203,7 +1206,7 @@ def get_coordinatorport(datadir):
 
 ######
 def check_permissions(username):
-    logger.debug("--Checking that current user can use GP binaries")
+    logger.debug("--Checking that current user can use CloudberryDB binaries")
     chk_gpdb_id(username)
 
 
@@ -1523,7 +1526,7 @@ def chk_gpdb_id(username):
     path="%s/bin/initdb" % GPHOME
     if not os.access(path,os.X_OK):
         raise GpError("File permission mismatch.  The current user %s does not have sufficient"
-                      " privileges to run the Cloudberry binaries and management utilities." % username )
+                      " privileges to run the CloudberryDB binaries and management utilities." % username )
 
 
 def chk_local_db_running(datadir, port):
@@ -1571,7 +1574,7 @@ def get_lockfile_name(port):
 
 
 def get_local_db_mode(coordinator_data_dir):
-    """ Gets the mode Cloudberry is running in.
+    """ Gets the mode CloudberryDB is running in.
         Possible return values are:
             'NORMAL'
             'RESTRICTED'

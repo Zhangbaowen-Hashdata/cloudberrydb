@@ -3,6 +3,7 @@
  * alter.c
  *	  Drivers for generic alter commands
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -33,6 +34,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_profile.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
@@ -379,6 +381,9 @@ ExecRenameStmt_internal(RenameStmt *stmt)
 		case OBJECT_POLICY:
 			return rename_policy(stmt);
 
+		case OBJECT_PROFILE:
+			return rename_profile(stmt->subname, stmt->newname);
+
 		case OBJECT_DOMAIN:
 		case OBJECT_TYPE:
 			return RenameType(stmt);
@@ -550,6 +555,7 @@ ExecAlterObjectSchemaStmt_internal(AlterObjectSchemaStmt *stmt,
 		case OBJECT_TABLE:
 		case OBJECT_VIEW:
 		case OBJECT_MATVIEW:
+		case OBJECT_DIRECTORY_TABLE:
 			address = AlterTableNamespace(stmt,
 										  oldSchemaAddr ? &oldNspOid : NULL);
 			break;
@@ -726,13 +732,26 @@ AlterObjectNamespace_oid(Oid classId, Oid objid, Oid nspOid,
 		case OCLASS_TRANSFORM:
 		case OCLASS_EXTPROTOCOL:
 		case OCLASS_TASK:
+		case OCLASS_PROFILE:
+		case OCLASS_PASSWORDHISTORY:
+		case OCLASS_STORAGE_SERVER:
+		case OCLASS_STORAGE_USER_MAPPING:
 			/* ignore object types that don't have schema-qualified names */
 			break;
 
+		default:
+		{
+			struct CustomObjectClass *coc;
+
+			coc = find_custom_object_class_by_classid(classId, false);
+			if (coc->alter_namespace)
+				coc->alter_namespace(coc, &dep, nspOid, objsMoved);
 			/*
 			 * There's intentionally no default: case here; we want the
 			 * compiler to warn if a new OCLASS hasn't been handled above.
 			 */
+			break;
+		}
 	}
 
 	return oldNspOid;

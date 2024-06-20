@@ -31,6 +31,7 @@
 #include "catalog/indexing.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_directory_table.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"
@@ -40,6 +41,7 @@
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
+#include "commands/matview.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
@@ -703,6 +705,9 @@ DefineIndex(Oid relationId,
 	bool		shouldDispatch;
 	Oid			blkdirrelid = InvalidOid;
 
+	if (RelationIsDirectoryTable(relationId))
+		elog(ERROR, "Disallowed to create index on directory table \"%s\".", get_rel_name(relationId));
+
 	shouldDispatch = (Gp_role == GP_ROLE_DISPATCH &&
 					  ENABLE_DISPATCH() &&
 					  !IsBootstrapProcessingMode());
@@ -846,6 +851,7 @@ DefineIndex(Oid relationId,
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
 		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_DIRECTORY_TABLE:
 			/* OK */
 			break;
 		case RELKIND_FOREIGN_TABLE:
@@ -1021,6 +1027,10 @@ DefineIndex(Oid relationId,
 	 * look up the access method, verify it can handle the requested features
 	 */
 	accessMethodName = stmt->accessMethod;
+	if (accessMethodName == NULL)
+	{
+		accessMethodName = default_index_access_method;
+	}
 	tuple = SearchSysCache1(AMNAME, PointerGetDatum(accessMethodName));
 	if (!HeapTupleIsValid(tuple))
 	{
@@ -1154,6 +1164,43 @@ DefineIndex(Oid relationId,
 					  amcanorder, stmt->isconstraint);
 
 	/*
+	 * We disallow unique indexes on IVM columns of IMMVs.
+	 */
+	if (RelationIsIVM(rel) && stmt->unique)
+	{
+		for (int i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
+		{
+			AttrNumber	attno = indexInfo->ii_IndexAttrNumbers[i];
+			if (attno > 0)
+			{
+				char *name = NameStr(TupleDescAttr(rel->rd_att, attno - 1)->attname);
+				if (name && isIvmName(name))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("unique index creation on IVM columns is not supported")));
+			}
+		}
+
+		if (indexInfo->ii_Expressions)
+		{
+			Bitmapset  *indexattrs = NULL;
+			int			varno = -1;
+
+			pull_varattnos((Node *) indexInfo->ii_Expressions, 1, &indexattrs);
+
+			while ((varno = bms_next_member(indexattrs, varno)) >= 0)
+			{
+				int attno = varno + FirstLowInvalidHeapAttributeNumber;
+				char *name = NameStr(TupleDescAttr(rel->rd_att, attno - 1)->attname);
+				if (name && isIvmName(name))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("unique index creation on IVM columns is not supported")));
+			}
+
+		}
+	}
+	/*
 	 * Extra checks when creating a PRIMARY KEY index.
 	 */
 	if (stmt->primary)
@@ -1268,7 +1315,7 @@ DefineIndex(Oid relationId,
 			 * btree opclasses; if there are ever any other index types that
 			 * support unique indexes, this logic will need extension.
 			 */
-			if (accessMethodId == BTREE_AM_OID)
+			if (IsIndexAccessMethod(accessMethodId, BTREE_AM_OID))
 				eq_strategy = BTEqualStrategyNumber;
 			else
 				ereport(ERROR,
@@ -3465,6 +3512,7 @@ ReindexMultipleTables(ReindexStmt *stmt, ReindexParams *params)
 		 * are processed.
 		 */
 		if (classtuple->relkind != RELKIND_RELATION &&
+			classtuple->relkind != RELKIND_DIRECTORY_TABLE &&
 			classtuple->relkind != RELKIND_MATVIEW)
 			continue;
 
@@ -3925,6 +3973,7 @@ ReindexRelationConcurrently(ReindexStmt *stmt, Oid relationOid, ReindexParams *p
 		case RELKIND_RELATION:
 		case RELKIND_MATVIEW:
 		case RELKIND_TOASTVALUE:
+		case RELKIND_DIRECTORY_TABLE:
 			{
 				/*
 				 * In the case of a relation, find all its indexes including

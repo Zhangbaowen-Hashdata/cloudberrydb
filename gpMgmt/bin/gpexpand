@@ -57,7 +57,7 @@ DBNAME = 'postgres'
 _gp_expand = None
 
 description = ("""
-Adds additional segments to a pre-existing GPDB Array.
+Adds additional segments to a pre-existing CBDB Array.
 """)
 
 _help = ["""
@@ -442,7 +442,7 @@ class GpExpandStatus():
 
     def _sync_status_file(self):
         """Syncs the gpexpand status file with the coordinator mirror"""
-        cpCmd = Scp('gpexpand copying status file to coordinator mirror',
+        cpCmd = Rsync('gpexpand copying status file to coordinator mirror',
                     srcFile=self._status_filename,
                     dstFile=self._status_standby_filename,
                     dstHost=self._coordinator_mirror.getSegmentHostName())
@@ -512,7 +512,7 @@ class GpExpandStatus():
         """ Sync the segment configuration backup file to standby """
         if self._coordinator_mirror:
             self.logger.debug("Sync segment configuration backup file")
-            cpCmd = Scp('gpexpand copying segment configuration backup file to coordinator mirror',
+            cpCmd = Rsync('gpexpand copying segment configuration backup file to coordinator mirror',
                         srcFile=self._gp_segment_configuration_backup,
                         dstFile=self._segment_configuration_standby_filename,
                         dstHost=self._coordinator_mirror.getSegmentHostName())
@@ -571,7 +571,7 @@ class SegmentTemplateError(Exception): pass
 # -------------------------------------------------------------------------
 class SegmentTemplate:
     """Class for creating, distributing and deploying new segments to an
-    existing GPDB array"""
+    existing CBDB array"""
 
     def __init__(self, logger, statusLogger, pool,
                  gparray, coordinatorDataDirectory,
@@ -757,7 +757,7 @@ class SegmentTemplate:
         """Distributes template tar file to hosts"""
         for host in self.hosts:
             logger.debug('Copying tar file to %s' % host)
-            cpCmd = Scp(name='gpexpand distribute tar file to new hosts',
+            cpCmd = Rsync(name='gpexpand distribute tar file to new hosts',
                         srcFile=self.schema_tar_file,
                         dstFile=self.segTarDir,
                         dstHost=host)
@@ -846,7 +846,7 @@ class SegmentTemplate:
         localHostname = self.gparray.coordinator.getSegmentHostName()
         cmdName = 'gpexpand copying postgresql.conf to %s:%s/postgresql.conf' \
                   % (self.srcSegHostname, self.srcSegDataDir)
-        cpCmd = Scp(name=cmdName, srcFile=self.srcSegDataDir + '/postgresql.conf',
+        cpCmd = Rsync(name=cmdName, srcFile=self.srcSegDataDir + '/postgresql.conf',
             dstFile=self.tempDir, dstHost=localHostname, ctxt=REMOTE,
             remoteHost=self.srcSegHostname)
         cpCmd.run(validateAfter=True)
@@ -854,7 +854,7 @@ class SegmentTemplate:
         self.logger.info('Copying pg_hba.conf from existing segment into template')
         cmdName = 'gpexpand copy pg_hba.conf to %s:%s/pg_hba.conf' \
                   % (self.srcSegHostname, self.srcSegDataDir)
-        cpCmd = Scp(name=cmdName, srcFile=self.srcSegDataDir + '/pg_hba.conf',
+        cpCmd = Rsync(name=cmdName, srcFile=self.srcSegDataDir + '/pg_hba.conf',
                     dstFile=self.tempDir, dstHost=localHostname,ctxt=REMOTE,
                     remoteHost=self.srcSegHostname)
         cpCmd.run(validateAfter=True)
@@ -1109,6 +1109,8 @@ class gpexpand:
         tblspc_info = {}
 
         for oid in tblspc_oids:
+            if oid not in tblspc_oid_names:
+                continue
             location = os.path.dirname(os.readlink(os.path.join(coordinator_tblspc_dir,
                                                                 oid)))
             tblspc_info[oid] = {"location": location,
@@ -1221,6 +1223,15 @@ class gpexpand:
         """
         coordinator_tblspc_dir = self.gparray.coordinator.getSegmentTableSpaceDirectory()
         if not os.listdir(coordinator_tblspc_dir):
+            return None
+        
+        tblspc_oids = os.listdir(coordinator_tblspc_dir)
+        tblspc_oid_names = self.get_tablespace_oid_names()
+        flag = False
+        for oid in tblspc_oids:
+            if oid in tblspc_oid_names:
+                flag = True
+        if not flag:
             return None
 
         if not self.options.filename:
@@ -1384,6 +1395,25 @@ class gpexpand:
             self.pool.addCommand(segStartCmd)
         self.pool.join()
         self.pool.check_results()
+
+
+        for i in range(1,12):
+            flag = True
+            for segment in newSegments:
+                if seg.isSegmentMirror() == True:
+                    continue
+
+                cmd = Command('pg_isready for segment',
+                            "pg_isready -q -h %s -p %d -d %s" % (segment.getSegmentHostName(), segment.getSegmentPort(), segment.getSegmentDataDirectory()))
+                cmd.run()
+                rc = cmd.get_return_code()
+                if rc != 0:
+                    flag &= False
+            if flag: 
+                break
+            time.sleep(10)
+            self.logger.info("Waiting for segment ready last for %s second" % (i*10))
+
 
         """
         Build the list of delete statements based on the COORDINATOR_ONLY_TABLES
@@ -2195,7 +2225,7 @@ def read_hosts_file(hosts_file):
 
 def interview_setup(gparray, options):
     help = """
-System Expansion is used to add segments to an existing GPDB array.
+System Expansion is used to add segments to an existing CBDB array.
 gpexpand did not detect a System Expansion that is in progress.
 
 Before initiating a System Expansion, you need to provision and burn-in
@@ -2397,7 +2427,7 @@ def main(options, args, parser):
             gparray = GpArray.initFromCatalog(dburl, utility=True)
         except DatabaseError as ex:
             logger.error('Failed to connect to database.  Make sure the')
-            logger.error('Cloudberry instance you wish to expand is running')
+            logger.error('CloudberryDB instance you wish to expand is running')
             logger.error('and that your environment is correct, then rerun')
             logger.error('gexpand ' + ' '.join(sys.argv[1:]))
             sys.exit(1)

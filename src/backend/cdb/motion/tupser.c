@@ -412,7 +412,11 @@ SerializeTuple(TupleTableSlot *slot, SerTupInfo *pSerInfo, struct directTranspor
 	{
 		Form_pg_attribute attr = TupleDescAttr(slot->tts_tupleDescriptor, i);
 
-		if (!attr->attisdropped && attr->attlen == -1 && !slot->tts_isnull[i])
+		/*
+		 * Cannot access slot->tts_isnull before invoking slot_getallattrs.
+		 * See Github Issue 16906.
+		 */
+		if (!attr->attisdropped && attr->attlen == -1)
 		{
 			hasExternalAttr = true;
 			break;
@@ -426,7 +430,12 @@ SerializeTuple(TupleTableSlot *slot, SerTupInfo *pSerInfo, struct directTranspor
 	{
 		Datum	   *values;
 
-		slot_getallattrs(slot);
+		/* it is same logic if we remove the `if case`
+		 * because caller won't pass virtual tuple here except test.
+		 */
+		if (!TTS_IS_VIRTUAL(slot)) {
+			slot_getallattrs(slot);
+		}
 		values = slot->tts_values;
 
 		for (int i = 0; i < natts; i++)

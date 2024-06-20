@@ -58,6 +58,7 @@
 #include "utils/resource_manager.h"
 #include "utils/varlena.h"
 #include "utils/vmem_tracker.h"
+#include "catalog/index.h"
 
 /*
  * These constants are copied from guc.c. They should not bitrot when we
@@ -145,6 +146,7 @@ int			gp_appendonly_compaction_threshold = 0;
 bool		enable_parallel = false;
 int			gp_appendonly_insert_files = 0;
 int			gp_appendonly_insert_files_tuples_range = 0;
+int			gp_random_insert_segments = 0;
 bool		gp_heap_require_relhasoids_match = true;
 bool		gp_local_distributed_cache_stats = false;
 bool		debug_xlog_record_read = false;
@@ -361,6 +363,7 @@ int			optimizer_penalize_broadcast_threshold;
 double		optimizer_cost_threshold;
 double		optimizer_nestloop_factor;
 double		optimizer_sort_factor;
+double		optimizer_spilling_mem_threshold;
 
 /* Optimizer hints */
 int			optimizer_join_arity_for_associativity_commutativity;
@@ -428,6 +431,9 @@ bool		gp_enable_global_deadlock_detector = false;
 
 bool gp_enable_predicate_pushdown;
 int  gp_predicate_pushdown_sample_rows;
+
+bool        enable_offload_entry_to_qe = false;
+bool enable_answer_query_using_materialized_views = false;
 
 static const struct config_enum_entry gp_log_format_options[] = {
 	{"text", 0},
@@ -2427,6 +2433,16 @@ struct config_bool ConfigureNamesBool_gp[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_offload_entry_to_qe", PGC_USERSET, DEVELOPER_OPTIONS,
+		    gettext_noop("Enable plans with operations on coordinator to be offloaded to QEs."),
+	        NULL,
+		    GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE | GUC_GPDB_NO_SYNC
+		},
+		&enable_offload_entry_to_qe,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"optimizer_enable_gather_on_segment_for_dml", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Enable DML optimization by enforcing a non-master gather in the optimizer."),
 			NULL,
@@ -2971,6 +2987,26 @@ struct config_bool ConfigureNamesBool_gp[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"gp_internal_is_singlenode", PGC_POSTMASTER, UNGROUPED,
+			 gettext_noop("Is in SingleNode mode (no segments). WARNING: user SHOULD NOT set this by any means."),
+			 NULL,
+			 GUC_IS_NAME | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_WHILE_SEC_REST
+		},
+		&gp_internal_is_singlenode,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_answer_query_using_materialized_views", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("allow to answer query results using materialized views."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_answer_query_using_materialized_views,
+		false,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{
@@ -3166,7 +3202,7 @@ struct config_int ConfigureNamesInt_gp[] =
 			NULL
 		},
 		&gp_appendonly_insert_files,
-		4 /* CBDB_PARALLEL If default value is changed, set it in src/test/regress/GNUMakefile too, see details there */, 0, 127,
+		4, 0, 127,
 		NULL, NULL, NULL
 	},
 
@@ -3178,6 +3214,16 @@ struct config_int ConfigureNamesInt_gp[] =
 		},
 		&gp_appendonly_insert_files_tuples_range,
 		100000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"gp_random_insert_segments", PGC_USERSET, CUSTOM_OPTIONS,
+			gettext_noop("Use limited number of segments for random distributed table insertion."),
+			NULL
+		},
+		&gp_random_insert_segments,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4367,13 +4413,24 @@ struct config_real ConfigureNamesReal_gp[] =
 	},
 
 	{
-		{"optimizer_sort_factor",PGC_USERSET, QUERY_TUNING_OTHER,
+		{"optimizer_sort_factor", PGC_USERSET, QUERY_TUNING_OTHER,
 			gettext_noop("Set the sort cost factor in the optimizer, 1.0 means same as default, > 1.0 means more costly than default, < 1.0 means means less costly than default"),
 			NULL,
 			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
 		},
 		&optimizer_sort_factor,
 		1.0, 0.0, DBL_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"optimizer_spilling_mem_threshold", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Set the optimizer factor for threshold of spilling to memory, 0.0 means unbounded"),
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NOT_IN_SAMPLE
+		},
+		&optimizer_spilling_mem_threshold,
+		0.0, 0.0, DBL_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4560,6 +4617,17 @@ struct config_string ConfigureNamesString_gp[] =
 		&gp_server_version_string,
 		GP_VERSION,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"default_index_access_method", PGC_USERSET, CLIENT_CONN_STATEMENT,
+		 gettext_noop("Sets the default index access method."),
+		 NULL,
+		 GUC_IS_NAME
+		},
+		&default_index_access_method,
+		DEFAULT_INDEX_TYPE,
+		check_default_index_access_method, NULL, NULL
 	},
 #ifndef USE_INTERNAL_FTS
 	{

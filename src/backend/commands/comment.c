@@ -98,10 +98,11 @@ CommentObject(CommentStmt *stmt)
 				relation->rd_rel->relkind != RELKIND_MATVIEW &&
 				relation->rd_rel->relkind != RELKIND_COMPOSITE_TYPE &&
 				relation->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&
+				relation->rd_rel->relkind != RELKIND_DIRECTORY_TABLE &&
 				relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 				ereport(ERROR,
 						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-						 errmsg("\"%s\" is not a table, view, materialized view, composite type, or foreign table",
+						 errmsg("\"%s\" is not a table, directory table, view, materialized view, composite type, or foreign table",
 								RelationGetRelationName(relation))));
 			break;
 		default:
@@ -131,6 +132,7 @@ CommentObject(CommentStmt *stmt)
 		case OBJECT_ROLE:
 		case OBJECT_RESQUEUE:
 		case OBJECT_RESGROUP:
+		case OBJECT_PROFILE:
 			CreateSharedComments(address.objectId, address.classId, stmt->comment);
 			break;
 		default:

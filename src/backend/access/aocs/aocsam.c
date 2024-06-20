@@ -507,13 +507,15 @@ aocs_beginscan(Relation relation,
 	RelationIncrementReferenceCount(relation);
 
 	/*
-	 * the append-only meta data should never be fetched with
+	 * The append-only meta data should never be fetched with
 	 * SnapshotAny as bogus results are returned.
+	 * We use SnapshotSelf for metadata, as regular MVCC snapshot can hide newly
+	 * globally inserted tuples from global index build process.
 	 */
 	if (snapshot != SnapshotAny)
 		aocsMetaDataSnapshot = snapshot;
 	else
-		aocsMetaDataSnapshot = GetTransactionSnapshot();
+		aocsMetaDataSnapshot = SnapshotSelf;
 
 	seginfo = GetAllAOCSFileSegInfo(relation, aocsMetaDataSnapshot, &total_seg, NULL);
 	return aocs_beginscan_internal(relation,
@@ -986,7 +988,6 @@ aocs_insert_init(Relation rel, int segno)
 	desc = (AOCSInsertDesc) palloc0(sizeof(AOCSInsertDescData));
 	desc->aoi_rel = rel;
 	desc->appendOnlyMetaDataSnapshot = RegisterSnapshot(GetCatalogSnapshot(InvalidOid));
-	desc->insertMultiFiles = false;
 
 	/*
 	 * Writers uses this since they have exclusive access to the lock acquired
@@ -1047,9 +1048,6 @@ aocs_insert_init(Relation rel, int segno)
 											(FileSegInfo *) desc->fsInfo, desc->lastSequence,
 											rel, segno, tupleDesc->natts, true);
 
-	/* Should not enable insertMultiFiles if the table is created by own transaction or in utility mode */
-	if (Gp_role != GP_ROLE_UTILITY)
-		desc->insertMultiFiles = gp_appendonly_insert_files > 1 && !ShouldUseReservedSegno(rel, CHOOSE_MODE_WRITE);
 	return desc;
 }
 

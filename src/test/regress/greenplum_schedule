@@ -15,6 +15,9 @@
 #   hitting max_connections limit on segments.
 #
 
+# test for builtin namespace pg_ext_aux
+test: pg_ext_aux
+
 test: gp_dispatch_keepalives
 
 # copy command
@@ -51,10 +54,12 @@ test: leastsquares opr_sanity_gp decode_expr bitmapscan bitmapscan_ao case_gp li
 test: gpcopy
 
 test: orca_static_pruning orca_groupingsets_fallbacks
-test: filter gpctas gpdist gpdist_opclasses gpdist_legacy_opclasses matrix sublink table_functions olap_setup complex opclass_ddl information_schema guc_env_var gp_explain distributed_transactions explain_format olap_plans misc_jiras gp_copy_dtx
+test: filter gpctas gpdist gpdist_opclasses gpdist_legacy_opclasses matrix sublink table_functions olap_setup complex opclass_ddl information_schema guc_env_var gp_explain distributed_transactions explain_format olap_plans gp_copy_dtx
 # below test(s) inject faults so each of them need to be in a separate group
 test: guc_gp
 test: toast
+test: misc_jiras
+test: statement_mem_for_windowagg
 
 # namespace_gp test will show diff if concurrent tests use temporary tables.
 # So run it separately.
@@ -124,7 +129,7 @@ test: gp_runtime_filter
 #test: olap_window
 #test: tpch500GB
 
-test: db_size_functions
+test: db_size_functions cbdb_db_size_functions
 
 # FIXME: These tests no longer work, because they try to set
 # gp_interconnect_type, which doesn't work:
@@ -160,7 +165,7 @@ test: resource_group_gucs
 test: wrkloadadmin
 
 # expand_table tests may affect the result of 'gp_explain', keep them below that
-test: gp_toolkit_ao_funcs trig auth_constraint role portals_updatable plpgsql_cache timeseries pg_stat_last_operation pg_stat_last_shoperation gp_numeric_agg partindex_test partition_pruning runtime_stats expand_table expand_table_ao expand_table_aoco expand_table_regression
+test: gp_toolkit_ao_funcs trig auth_constraint role portals_updatable plpgsql_cache timeseries pg_stat_last_operation pg_stat_last_shoperation gp_numeric_agg partindex_test partition_pruning runtime_stats expand_table expand_table_ao expand_table_aoco expand_table_regression shrink_table
 
 # direct dispatch tests
 test: direct_dispatch bfv_dd bfv_dd_multicolumn bfv_dd_types
@@ -188,7 +193,7 @@ test: qp_misc_jiras qp_with_clause qp_executor qp_olap_windowerr qp_olap_window 
 test: qp_with_functional_inlining qp_with_functional_noinlining
 test: qp_functions_in_contexts_setup
 # test: qp_misc_rio_join_small qp_misc_rio qp_correlated_query qp_targeted_dispatch qp_gist_indexes2 qp_gist_indexes3 qp_gist_indexes4 qp_query_execution qp_functions_in_from qp_functions_in_select qp_functions_in_subquery qp_functions_in_subquery_column qp_functions_in_subquery_constant qp_functions_in_with
-test: qp_misc_rio_join_small qp_correlated_query qp_targeted_dispatch qp_gist_indexes2 qp_gist_indexes3 qp_gist_indexes4 qp_query_execution qp_functions_in_from qp_functions_in_select qp_functions_in_subquery qp_functions_in_subquery_column qp_functions_in_with
+test: qp_misc_rio_join_small qp_correlated_query qp_targeted_dispatch qp_gist_indexes2 qp_gist_indexes3 qp_gist_indexes4 qp_query_execution qp_functions_in_from qp_functions_in_select qp_functions_in_subquery qp_functions_in_subquery_column qp_functions_in_with correlated_subquery
 
 test: dpe qp_dpe qp_subquery qp_left_anti_semi_join qp_union_intersect qp_functions qp_functions_idf qp_regexp qp_resource_queue qp_orca_fallback
 
@@ -240,6 +245,9 @@ test: disable_autovacuum
 # Run uao[cs]_catalog_tables separately. They run VACUUM FULL on
 # append-optimized tables and assume that no AWAITING_DROP segfiles exist at
 # the end of VACUUM FULL.
+
+# uao_catalog_tables/uaocs_catalog_tables/uao_compaction/threshold/uaocs_compaction/threshold
+# should always be below disable_autovacuum, don't change the order.
 test: uao_catalog_tables
 test: uaocs_catalog_tables
 test: uao_compaction/threshold
@@ -250,8 +258,8 @@ test: uao_dml/uao_dml_column
 test: ao_locks
 test: freeze_aux_tables
 
-# gp parallel test
-test: gp_parallel
+# cbdb parallel test
+test: cbdb_parallel
 
 # These cannot run in parallel, because they check that VACUUM FULL shrinks table size.
 # A concurrent session could hold back the xid horizon and prevent old tuples from being
@@ -297,5 +305,20 @@ test: run_utility_gpexpand_phase1
 
 # check correct error message when create extension error on segment
 test: create_extension_fail
+
+# check profile feature
+test: profile
+
+# check offload entry root slice to QE feature
+test: offload_entry_to_qe
+
+# Tests of Answer Query Using Materialized Views.
+test: aqumv
+
+# test access method with encoding options
+test: am_encoding
+
+# tests of directory table
+test: directory_table
 
 # end of tests

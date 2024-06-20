@@ -3,6 +3,7 @@
  * pg_shdepend.c
  *	  routines to support manipulation of the pg_shdepend relation
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -20,6 +21,8 @@
 #include "access/xact.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
+#include "catalog/gp_storage_server.h"
+#include "catalog/gp_storage_user_mapping.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
@@ -38,6 +41,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_profile.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
@@ -1209,6 +1213,36 @@ shdepLockAndCheckObject(Oid classId, Oid objectId)
 				break;
 			}
 
+		case ProfileRelationId:
+			{
+				if (!SearchSysCacheExists1(PROFILEID, ObjectIdGetDatum(objectId)))
+					ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("profile %u was concurrently dropped",
+							       objectId)));
+				break;
+			}
+
+		case StorageServerRelationId:
+			{
+				if (!SearchSysCacheExists1(STORAGESERVEROID, ObjectIdGetDatum(objectId)))
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("storage server %u was concurrently dropped",
+			   						objectId)));
+				break;
+			}
+
+		case StorageUserMappingRelationId:
+			{
+				if (!SearchSysCacheExists1(STORAGEUSERMAPPINGUSERSERVER, ObjectIdGetDatum(objectId)))
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("storage user mapping %u was concurrently dropped",
+			   						objectId)));
+				break;
+			}
+
 
 		default:
 			elog(ERROR, "unrecognized shared classId: %u", classId);
@@ -1261,6 +1295,10 @@ storeObjectDescription(StringInfo descs,
 				appendStringInfo(descs, _("target of %s"), objdesc);
 			else if (deptype == SHARED_DEPENDENCY_TABLESPACE)
 				appendStringInfo(descs, _("tablespace for %s"), objdesc);
+			else if (deptype == SHARED_DEPENDENCY_PROFILE)
+				appendStringInfo(descs, _("profile of %s"), objdesc);
+			else if (deptype == SHARED_DEPENDENCY_STORAGE_SERVER)
+				appendStringInfo(descs, _("storage server of %s"), objdesc);
 			else
 				elog(ERROR, "unrecognized dependency type: %d",
 					 (int) deptype);
@@ -1682,4 +1720,69 @@ shdepReassignOwned(List *roleids, Oid newrole)
 	}
 
 	table_close(sdepRel, RowExclusiveLock);
+}
+
+/*
+ * recordProfileDependency
+ *
+ * A convenient wrapper of recordSharedDependencyOn -- register the specified
+ * roles of attached to profile.
+ */
+void
+recordProfileDependency(Oid roleId, Oid profileId)
+{
+	ObjectAddress myself,
+				referenced;
+
+	myself.classId = AuthIdRelationId;
+	myself.objectId = roleId;
+	myself.objectSubId = 0;
+
+	referenced.classId = ProfileRelationId;
+	referenced.objectId = profileId;
+	referenced.objectSubId = 0;
+
+	recordSharedDependencyOn(&myself, &referenced, SHARED_DEPENDENCY_PROFILE);
+}
+
+/*
+ * changeProfileDependency
+ *
+ * Update the shared dependencies to account for the new profile.
+ *
+ * Note: we don't need an objsubid argument because only whole objects
+ * have owners.
+ */
+void
+changeProfileDependency(Oid roleId, Oid newprofileId)
+{
+	Relation	sdepRel;
+
+	sdepRel = table_open(SharedDependRelationId, RowExclusiveLock);
+
+	/* Adjust the SHARED_DEPENDENCY_PROFILE entry */
+	shdepChangeDep(sdepRel,
+				AuthIdRelationId, roleId, 0,
+		       		ProfileRelationId, newprofileId,
+				SHARED_DEPENDENCY_PROFILE);
+
+	table_close(sdepRel, RowExclusiveLock);
+}
+
+/*
+ * recordStorageServerDependency
+ *
+ * A convenient wrapper of recordSharedDependencyOn -- register the specified
+ * storage user mapping of attached to storage server.
+ */
+void
+recordStorageServerDependency(Oid classId, Oid objectId, Oid srvId)
+{
+	ObjectAddress myself,
+		referenced;
+
+	ObjectAddressSet(myself, classId, objectId);
+	ObjectAddressSet(referenced, StorageServerRelationId, srvId);
+
+	recordSharedDependencyOn(&myself, &referenced, SHARED_DEPENDENCY_STORAGE_SERVER);
 }

@@ -209,6 +209,7 @@ _outCopyStmt(StringInfo str, const CopyStmt *node)
 	WRITE_BOOL_FIELD(is_from);
 	WRITE_BOOL_FIELD(is_program);
 	WRITE_STRING_FIELD(filename);
+	WRITE_STRING_FIELD(dirfilename);
 	WRITE_NODE_FIELD(options);
 	WRITE_NODE_FIELD(sreh);
 }
@@ -244,6 +245,11 @@ _outQueryDispatchDesc(StringInfo str, const QueryDispatchDesc *node)
 	WRITE_STRING_FIELD(parallelCursorName);
 	WRITE_BOOL_FIELD(useChangedAOOpts);
 	WRITE_INT_FIELD(secContext);
+	WRITE_NODE_FIELD(namedRelList);
+	WRITE_OID_FIELD(matviewOid);
+	WRITE_OID_FIELD(tableid);
+	WRITE_INT_FIELD(snaplen);
+	WRITE_STRING_FIELD(snapname);
 }
 
 static void
@@ -837,6 +843,15 @@ _outCreateRoleStmt(StringInfo str, const CreateRoleStmt *node)
 }
 
 static void
+_outCreateProfileStmt(StringInfo str, const CreateProfileStmt *node)
+{
+	WRITE_NODE_TYPE("CREATEPROFILESTMT");
+
+	WRITE_STRING_FIELD(profile_name);
+	WRITE_NODE_FIELD(options);
+}
+
+static void
 _outDenyLoginInterval(StringInfo str, const DenyLoginInterval *node)
 {
 	WRITE_NODE_TYPE("DENYLOGININTERVAL");
@@ -860,6 +875,15 @@ _outDropRoleStmt(StringInfo str, const DropRoleStmt *node)
 	WRITE_NODE_TYPE("DROPROLESTMT");
 
 	WRITE_NODE_FIELD(roles);
+	WRITE_BOOL_FIELD(missing_ok);
+}
+
+static	void
+_outDropProfileStmt(StringInfo str, const DropProfileStmt *node)
+{
+	WRITE_NODE_TYPE("DROPPROFILESTMT");
+
+	WRITE_NODE_FIELD(profiles);
 	WRITE_BOOL_FIELD(missing_ok);
 }
 
@@ -903,6 +927,15 @@ _outAlterRoleStmt(StringInfo str, const AlterRoleStmt *node)
 	WRITE_NODE_FIELD(role);
 	WRITE_NODE_FIELD(options);
 	WRITE_INT_FIELD(action);
+}
+
+static	void
+_outAlterProfileStmt(StringInfo str, const AlterProfileStmt *node)
+{
+	WRITE_NODE_TYPE("ALTERPROFILESTMT");
+
+	WRITE_STRING_FIELD(profile_name);
+	WRITE_NODE_FIELD(options);
 }
 
 static  void
@@ -1439,6 +1472,7 @@ _outCreateTrigStmt(StringInfo str, const CreateTrigStmt *node)
 	WRITE_BOOL_FIELD(deferrable);
 	WRITE_BOOL_FIELD(initdeferred);
 	WRITE_NODE_FIELD(constrrel);
+	WRITE_OID_FIELD(matviewId);
 }
 
 static void
@@ -1450,6 +1484,7 @@ _outCreateTableSpaceStmt(StringInfo str, const CreateTableSpaceStmt *node)
 	WRITE_NODE_FIELD(owner);
 	WRITE_STRING_FIELD(location);
 	WRITE_NODE_FIELD(options);
+	WRITE_STRING_FIELD(filehandler);
 }
 
 static void
@@ -1657,4 +1692,25 @@ _outTidRangeScan(StringInfo str, const TidRangeScan *node)
 	_outScanInfo(str, (const Scan *) node);
 
 	WRITE_NODE_FIELD(tidrangequals);
+}
+
+static void
+_outEphemeralNamedRelationInfo(StringInfo str, const EphemeralNamedRelationInfo *node)
+{
+	int			i;
+
+	WRITE_NODE_TYPE("EphemeralNamedRelationInfo");
+	WRITE_STRING_FIELD(name);
+	WRITE_OID_FIELD(reliddesc);
+	WRITE_INT_FIELD(natts);
+	WRITE_INT_FIELD(tuple->natts);
+
+	for (i = 0; i < node->tuple->natts; i++)
+		appendBinaryStringInfo(str, (char *) &node->tuple->attrs[i], ATTRIBUTE_FIXED_PART_SIZE);
+
+	WRITE_OID_FIELD(tuple->tdtypeid);
+	WRITE_INT_FIELD(tuple->tdtypmod);
+	WRITE_INT_FIELD(tuple->tdrefcount);
+	WRITE_ENUM_FIELD(enrtype, EphemeralNameRelationType);
+	WRITE_FLOAT_FIELD(enrtuples, "%.0f");
 }

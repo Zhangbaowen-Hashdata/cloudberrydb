@@ -46,7 +46,9 @@
 #include "access/xlog_internal.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_profile.h"
 #include "catalog/storage.h"
+#include "catalog/index.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "commands/trigger.h"
@@ -74,6 +76,7 @@
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/fts.h"
+#include "postmaster/loginmonitor.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
 #include "postmaster/walwriter.h"
@@ -252,6 +255,11 @@ static double defunct_double = 0;
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
 												 bool applySettings, int elevel);
 
+/*
+ * Track whether there were any deferred checks for custom resource managers
+ * specified in wal_consistency_checking.
+ */
+static bool check_wal_consistency_checking_deferred = false;
 
 /*
  * Options for enum values defined in this module.
@@ -572,6 +580,7 @@ bool		Debug_print_plan = false;
 bool		Debug_print_parse = false;
 bool		Debug_print_rewritten = false;
 bool		Debug_pretty_print = true;
+bool 		Debug_print_ivm = false;
 
 bool		log_parser_stats = false;
 bool		log_planner_stats = false;
@@ -1276,6 +1285,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"enable_password_profile", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
+		 gettext_noop("Use profile for password authentication security."),
+		 NULL
+		},
+		&enable_password_profile,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"fsync", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Forces synchronization of updates to disk."),
 			gettext_noop("The server will use the fsync() system call in several places to make "
@@ -1514,6 +1533,15 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&Debug_pretty_print,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"debug_print_ivm", PGC_USERSET, LOGGING_WHAT,
+			gettext_noop("Logs incremental matview execution steps."),
+			NULL
+		},
+		&Debug_print_ivm,
+		false,
 		NULL, NULL, NULL
 	},
 	{
@@ -5843,6 +5871,36 @@ InitializeGUCOptions(void)
 	 * environment variables.  Process those settings.
 	 */
 	InitializeGUCOptionsFromEnvironment();
+}
+
+/*
+ * If any custom resource managers were specified in the
+ * wal_consistency_checking GUC, processing was deferred. Now that
+ * shared_preload_libraries have been loaded, process wal_consistency_checking
+ * again.
+ */
+void
+InitializeWalConsistencyChecking(void)
+{
+	Assert(process_shared_preload_libraries_done);
+
+	if (check_wal_consistency_checking_deferred)
+	{
+		struct config_generic *guc;
+
+		guc = find_option("wal_consistency_checking", false, false, ERROR);
+
+		check_wal_consistency_checking_deferred = false;
+
+		set_config_option("wal_consistency_checking",
+						  wal_consistency_checking_string,
+						  PGC_POSTMASTER, guc->source,
+						  GUC_ACTION_SET, true, ERROR, false);
+
+		/* checking should not be deferred again */
+		Assert(!check_wal_consistency_checking_deferred);
+	}
+
 }
 
 /*
@@ -12084,13 +12142,13 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 	{
 		char	   *tok = (char *) lfirst(l);
 		bool		found = false;
-		RmgrId		rmid;
+		int			rmid;
 
 		/* Check for 'all'. */
 		if (pg_strcasecmp(tok, "all") == 0)
 		{
 			for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
-				if (RmgrTable[rmid].rm_mask != NULL)
+				if (RmgrIdExists(rmid) && GetRmgr(rmid).rm_mask != NULL)
 					newwalconsistency[rmid] = true;
 			found = true;
 		}
@@ -12102,8 +12160,8 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 			 */
 			for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
 			{
-				if (pg_strcasecmp(tok, RmgrTable[rmid].rm_name) == 0 &&
-					RmgrTable[rmid].rm_mask != NULL)
+				if (RmgrIdExists(rmid) && GetRmgr(rmid).rm_mask != NULL &&
+					pg_strcasecmp(tok, GetRmgr(rmid).rm_name) == 0)
 				{
 					newwalconsistency[rmid] = true;
 					found = true;
@@ -12114,10 +12172,21 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 		/* If a valid resource manager is found, check for the next one. */
 		if (!found)
 		{
-			GUC_check_errdetail("Unrecognized key word: \"%s\".", tok);
-			pfree(rawstring);
-			list_free(elemlist);
-			return false;
+			/*
+			 * Perhaps it's a custom resource manager. If so, defer checking
+			 * until InitializeWalConsistencyChecking().
+			 */
+			if (!process_shared_preload_libraries_done)
+			{
+				check_wal_consistency_checking_deferred = true;
+			}
+			else
+			{
+				GUC_check_errdetail("Unrecognized key word: \"%s\".", tok);
+				pfree(rawstring);
+				list_free(elemlist);
+				return false;
+			}
 		}
 	}
 
@@ -12133,7 +12202,20 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 static void
 assign_wal_consistency_checking(const char *newval, void *extra)
 {
-	wal_consistency_checking = (bool *) extra;
+	/*
+	 * If some checks were deferred, it's possible that the checks will fail
+	 * later during InitializeWalConsistencyChecking(). But in that case, the
+	 * postmaster will exit anyway, so it's safe to proceed with the
+	 * assignment.
+	 *
+	 * Any built-in resource managers specified are assigned immediately,
+	 * which affects WAL created before shared_preload_libraries are
+	 * processed. Any custom resource managers specified won't be assigned
+	 * until after shared_preload_libraries are processed, but that's OK
+	 * because WAL for a custom resource manager can't be written before the
+	 * module is loaded anyway.
+	 */
+	wal_consistency_checking = extra;
 }
 
 static bool
@@ -12457,7 +12539,7 @@ show_tcp_user_timeout(void)
 static bool
 check_maxconnections(int *newval, void **extra, GucSource source)
 {
-	if (*newval + autovacuum_max_workers + 1 +
+	if (*newval + autovacuum_max_workers + 1 + login_monitor_max_processes /* Login Monitor */ +
 		max_worker_processes + max_wal_senders > MAX_BACKENDS)
 		return false;
 	return true;
@@ -12475,7 +12557,7 @@ check_autovacuum_max_workers(int *newval, void **extra, GucSource source)
 static bool
 check_max_wal_senders(int *newval, void **extra, GucSource source)
 {
-	if (MaxConnections + autovacuum_max_workers + 1 +
+	if (MaxConnections + autovacuum_max_workers + 1 + login_monitor_max_processes /* Login Monitor */ +
 		max_worker_processes + *newval > MAX_BACKENDS)
 		return false;
 	return true;
@@ -12507,7 +12589,7 @@ check_autovacuum_work_mem(int *newval, void **extra, GucSource source)
 static bool
 check_max_worker_processes(int *newval, void **extra, GucSource source)
 {
-	if (MaxConnections + autovacuum_max_workers + 1 +
+	if (MaxConnections + autovacuum_max_workers + 1 + login_monitor_max_processes /* Login Monitor */ +
 		*newval + max_wal_senders > MAX_BACKENDS)
 		return false;
 

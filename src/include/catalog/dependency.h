@@ -4,6 +4,7 @@
  *	  Routines to support inter-object dependencies.
  *
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -73,6 +74,14 @@ typedef enum DependencyType
  * storage don't need this: they are protected by the existence of a physical
  * file in the tablespace.)
  *
+ * (f) a SHARED_DEPENDENCY_PROFILE entry means that the referenced object
+ * is a profile mentioned in a role object. The referenced object must be
+ * a pg_profile entry.
+ *
+ * (g) a SHARED_DEPENDENCY_STORAGE_SERVER entry means that the referenced
+ * object is a storage server mentioned in a storage user mapping object.
+ * The referenced object must be a gp_storage_server entry.
+ *
  * SHARED_DEPENDENCY_INVALID is a value used as a parameter in internal
  * routines, and is not valid in the catalog itself.
  */
@@ -83,6 +92,8 @@ typedef enum SharedDependencyType
 	SHARED_DEPENDENCY_ACL = 'a',
 	SHARED_DEPENDENCY_POLICY = 'r',
 	SHARED_DEPENDENCY_TABLESPACE = 't',
+	SHARED_DEPENDENCY_PROFILE = 'f',
+	SHARED_DEPENDENCY_STORAGE_SERVER = 's',
 	SHARED_DEPENDENCY_INVALID = 0
 } SharedDependencyType;
 
@@ -135,8 +146,13 @@ typedef enum ObjectClass
 	OCLASS_TRANSFORM,			/* pg_transform */
 
 	/* GPDB additions */
+	OCLASS_PROFILE,                         /* pg_profile */
+	OCLASS_PASSWORDHISTORY,                 /* pg_password_history */
+	OCLASS_DIRTABLE,			/* pg_directory_table */
+	OCLASS_STORAGE_SERVER,		/* gp_storage_server */
+	OCLASS_STORAGE_USER_MAPPING,	/* gp_storage_user_mapping */
 	OCLASS_EXTPROTOCOL,			/* pg_extprotocol */
-	OCLASS_TASK					/* pg_task */
+	OCLASS_TASK,				/* pg_task */
 } ObjectClass;
 
 #define LAST_OCLASS		OCLASS_TASK
@@ -278,4 +294,45 @@ extern void checkDependencies(const ObjectAddresses *objects,
 							  const char *msg,
 							  const char *hint);
 
+extern void recordProfileDependency(Oid roleId, Oid profileId);
+
+extern void changeProfileDependency(Oid roleId, Oid profileId);
+
+extern void recordStorageServerDependency(Oid classId, Oid objectId, Oid srvId);
+
+/* Custom object class */
+struct StringInfoData;
+struct CustomObjectClass {
+	Oid class_id;
+	int oclass;
+
+	void (*do_delete)(struct CustomObjectClass *self,
+					  const ObjectAddress *object, int flags);
+	void (*object_desc)(struct CustomObjectClass *self,
+						const ObjectAddress *object,
+						bool missing_ok,
+						struct StringInfoData *buffer);
+	void (*object_type_desc)(struct CustomObjectClass *self,
+							 const ObjectAddress *object,
+							 bool missing_ok,
+							 struct StringInfoData *buffer);
+	void (*object_identity_parts)(struct CustomObjectClass *self,
+								  const ObjectAddress *object,
+								  List **objname,
+								  List **objargs,
+								  bool missing_ok,
+								  struct StringInfoData *buffer);
+
+	Oid (*alter_namespace)(struct CustomObjectClass *self,
+						   const ObjectAddress *object,
+						   Oid nspOid,
+						   ObjectAddresses *objsMoved);
+	bool (*support_event_trigger)(struct CustomObjectClass *self);
+	// FIXME: unclear which arguments should pass
+	void (*alter_column_type)(struct CustomObjectClass *self);
+
+};
+extern int register_custom_object_class(struct CustomObjectClass *coc);
+extern struct CustomObjectClass *find_custom_object_class(int oclass);
+extern struct CustomObjectClass *find_custom_object_class_by_classid(Oid class_id, bool missing_ok);
 #endif							/* DEPENDENCY_H */

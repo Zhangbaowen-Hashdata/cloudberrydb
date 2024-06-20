@@ -118,7 +118,7 @@ typedef struct shareinput_Xslice_state
 } shareinput_Xslice_state;
 
 /* shared memory hash table holding 'shareinput_Xslice_state' entries */
-static HTAB *shareinput_Xslice_hash = NULL;
+HTAB *shareinput_Xslice_hash = NULL;
 
 /*
  * The tuplestore files for all share input scans are held in one SharedFileSet.
@@ -135,7 +135,7 @@ static HTAB *shareinput_Xslice_hash = NULL;
  * are reference counted separately, and we clean up the files backing each
  * individual ShareInputScan whenever its reference count reaches zero.
  */
-static dsm_handle *shareinput_Xslice_dsm_handle_ptr;
+dsm_handle *shareinput_Xslice_dsm_handle_ptr;
 static SharedFileSet *shareinput_Xslice_fileset;
 
 /*
@@ -366,6 +366,15 @@ ExecShareInputScan(PlanState *pstate)
 	/* if first time call, need to initialize the tuplestore state.  */
 	if (!node->isready)
 		init_tuplestore_state(node);
+	
+	/*
+	 * Return NULL when necessary.
+	 * This could help improve performance, especially when tuplestore is huge, because ShareInputScan 
+	 * do not need to read tuple from tuplestore when discard_output is true, which means current 
+	 * ShareInputScan is one but not the last one of Sequence's subplans.
+	 */
+	if (sisc->discard_output)
+	  return NULL;
 
 	slot = node->ss.ps.ps_ResultTupleSlot;
 

@@ -1638,10 +1638,12 @@ appendonly_beginscan(Relation relation,
 	if (appendOnlyMetaDataSnapshot == SnapshotAny)
 	{
 		/*
-		 * the append-only meta data should never be fetched with
+		 * The append-only meta data should never be fetched with
 		 * SnapshotAny as bogus results are returned.
+		 * We use SnapshotSelf for metadata, as regular MVCC snapshot can hide
+		 * newly globally inserted tuples from global index build process.
 		 */
-		appendOnlyMetaDataSnapshot = GetTransactionSnapshot();
+		appendOnlyMetaDataSnapshot = SnapshotSelf;
 	}
 
 	/*
@@ -1660,6 +1662,18 @@ appendonly_beginscan(Relation relation,
 												pscan,
 												flags);
 
+	return (TableScanDesc) aoscan;
+}
+
+TableScanDesc
+appendonly_beginscan_extractcolumns(Relation rel, Snapshot snapshot, int nkeys, struct ScanKeyData *key,
+									ParallelTableScanDesc parallel_scan,
+									PlanState *ps, uint32 flags)
+{
+	AppendOnlyScanDesc aoscan;
+	aoscan = (AppendOnlyScanDesc) appendonly_beginscan(rel, snapshot, nkeys, key, parallel_scan, flags);
+	if (gp_enable_predicate_pushdown)
+		ps->qual = appendonly_predicate_pushdown_prepare(aoscan, ps->qual, ps->ps_ExprContext);
 	return (TableScanDesc) aoscan;
 }
 
@@ -1785,6 +1799,12 @@ appendonly_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSl
 		ExecClearTuple(slot);
 
 	return false;
+}
+
+uint32
+appendonly_scan_flags(Relation relation)
+{
+	return 0;
 }
 
 static void
@@ -2634,7 +2654,6 @@ appendonly_insert_init(Relation rel, int segno)
 
 	aoInsertDesc->aoi_rel = rel;
 	aoInsertDesc->range = 0;
-	aoInsertDesc->insertMultiFiles = false;
 
 	/*
 	 * We want to see an up-to-date view of the metadata. The target segment's
@@ -2822,9 +2841,6 @@ aoInsertDesc->appendOnlyMetaDataSnapshot, //CONCERN:Safe to assume all block dir
 											aoInsertDesc->fsInfo, aoInsertDesc->lastSequence,
 											rel, segno, 1, false);
 
-	/* Should not enable insertMultiFiles if the table is created by own transaction or in utility mode */
-	if (Gp_role != GP_ROLE_UTILITY)
-		aoInsertDesc->insertMultiFiles = gp_appendonly_insert_files > 1 && !ShouldUseReservedSegno(rel, CHOOSE_MODE_WRITE);
 	return aoInsertDesc;
 }
 

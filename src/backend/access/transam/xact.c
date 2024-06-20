@@ -39,6 +39,7 @@
 #include "catalog/storage_tablespace.h"
 #include "catalog/storage_database.h"
 #include "commands/async.h"
+#include "commands/matview.h"
 #include "commands/dbcommands.h"
 #include "commands/extension.h"
 #include "commands/resgroupcmds.h"
@@ -2815,8 +2816,8 @@ CommitTransaction(void)
 	if (IsInParallelMode())
 		AtEOXact_Parallel(true);
 
-	/* Clean up GP style parallel workers which we might have. */
-	AtEOXact_GP_Parallel();
+	/* Clean up CBDB style parallel workers which we might have. */
+	AtEOXact_CBDB_Parallel();
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
@@ -2824,9 +2825,10 @@ CommitTransaction(void)
 	AtEOXact_SharedSnapshot();
 
 	/* Perform any Resource Scheduler commit procesing. */
-	if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) && IsResQueueEnabled())
 		AtCommit_ResScheduler();
 
+	AtEOXact_IVM(true);
 	/*
 	 * Let ON COMMIT management do its thing (must happen after closing
 	 * cursors, to avoid dangling-reference problems)
@@ -3026,7 +3028,7 @@ CommitTransaction(void)
 	 * worry about aborts as we release session level locks automatically during
 	 * an abort as opposed to a commit.
 	 */
-	if(Gp_role == GP_ROLE_DISPATCH)
+	if(Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE())
 		MoveDbSessionLockRelease();
 
 	AtCommit_TablespaceStorage();
@@ -3156,6 +3158,8 @@ PrepareTransaction(void)
 
 	/* Shut down the deferred-trigger manager */
 	AfterTriggerEndXact(true);
+	/* Just after clean up triggers */
+	AtEOXact_IVM(true);
 
 	/*
 	 * Let ON COMMIT management do its thing (must happen after closing
@@ -3542,8 +3546,8 @@ AbortTransaction(void)
 		s->parallelModeLevel = 0;
 	}
 
-	/* Clean up GP style parallel workers which we might have. */
-	AtEOXact_GP_Parallel();
+	/* Clean up CBDB style parallel workers which we might have. */
+	AtEOXact_CBDB_Parallel();
 
 	/*
 	 * do abort processing
@@ -3555,7 +3559,7 @@ AbortTransaction(void)
 	AtEOXact_SharedSnapshot();
 
 	/* Perform any Resource Scheduler abort procesing. */
-	if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) && IsResQueueEnabled())
 		AtAbort_ResScheduler();
 
 	AtEOXact_DispatchOids(false);
@@ -3565,6 +3569,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
+	AtAbort_IVM();
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as
@@ -6151,6 +6156,9 @@ AbortSubTransaction(void)
 	pgstat_progress_end_command();
 	AbortBufferIO();
 	UnlockBuffers();
+
+	/* Clean up hash entries for incremental view maintenance */
+	AtAbort_IVM();
 
 	/* Reset WAL record construction state */
 	XLogResetInsertion();

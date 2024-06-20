@@ -161,7 +161,7 @@ typedef struct
 
 /* Local functions */
 static Node *preprocess_expression(PlannerInfo *root, Node *expr, int kind);
-static void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
+void preprocess_qual_conditions(PlannerInfo *root, Node *jtnode);
 static void grouping_planner(PlannerInfo *root, double tuple_fraction);
 static grouping_sets_data *preprocess_grouping_sets(PlannerInfo *root);
 static List *remap_to_groupclause_idx(List *groupClause, List *gsets,
@@ -292,6 +292,7 @@ static Oid getSimplyUpdatableRel(Query *query);
 static split_rollup_data *make_new_rollups_for_hash_grouping_set(PlannerInfo *root,
 																 Path *path,
 																 grouping_sets_data *gd);
+
 
 /*****************************************************************************
  *
@@ -491,8 +492,9 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	/*
 	 * GPDB: allow to use parallel or not.
+	 * SINGLENODE_FIXME: We'll enable parallel in singlenode mode later.
 	 */
-	if (!enable_parallel)
+	if (!enable_parallel || IS_SINGLENODE())
 		glob->parallelModeOK = false;
 
 	/*
@@ -559,6 +561,8 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	/* primary planning entry point (may recurse for subqueries) */
 	root = subquery_planner(glob, parse, NULL,
 							false, tuple_fraction, config);
+	/* AQUMV: parse tree may be rewritten. */
+	parse = root->parse;
 
 	/* Select best Path and turn it into a Plan */
 	final_rel = fetch_upper_rel(root, UPPERREL_FINAL, NULL);
@@ -589,6 +593,12 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	top_plan = create_plan(root, best_path, top_slice);
 	/* Decorate the top node of the plan with a Flow node. */
 	top_plan->flow = cdbpathtoplan_create_flow(root, best_path->locus);
+
+	/* Modifier: If root slice is executed on QD, try to offload it to a QE */
+	if (enable_offload_entry_to_qe && Gp_role == GP_ROLE_DISPATCH)
+	{
+		top_plan = offload_entry_to_qe(root, top_plan, best_path->locus.parallel_workers);
+	}
 
 	/*
 	 * If creating a plan for a scrollable cursor, make sure it can run
@@ -695,7 +705,13 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	Assert(glob->finalrtable == NIL);
 	Assert(glob->finalrowmarks == NIL);
 	Assert(glob->resultRelations == NIL);
+
+	/* AQUMV_FIXME_MVP: We may rewrite the parse tree. */
+	AssertImply(!enable_answer_query_using_materialized_views, parse == root->parse);
+#if 0
 	Assert(parse == root->parse);
+#endif
+	parse = root->parse;
 
 	if (Gp_role == GP_ROLE_DISPATCH)
 	{
@@ -1490,7 +1506,7 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
  *		Recursively scan the query's jointree and do subquery_planner's
  *		preprocessing work on each qual condition found therein.
  */
-static void
+void
 preprocess_qual_conditions(PlannerInfo *root, Node *jtnode)
 {
 	if (jtnode == NULL)
@@ -1864,6 +1880,16 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 		 * of the query's sort clause, distinct clause, etc.
 		 */
 		current_rel = query_planner(root, standard_qp_callback, &qp_extra);
+
+		/*
+		 * Answer Query Using Materialized Views(AQUMV).
+		 */
+		if (Gp_role == GP_ROLE_DISPATCH &&
+			enable_answer_query_using_materialized_views)
+		{
+			current_rel = answer_query_using_materialized_views(root, current_rel, standard_qp_callback, &qp_extra);
+			parse = root->parse;
+		}
 
 		/*
 		 * Convert the query's result tlist into PathTarget format.
@@ -2489,7 +2515,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 	 * Limit parallel:
 	 * PG doesn't have to handle limit here becuase all partial paths have been Gathered
 	 * into pathlist, and the subpath of Limit node could be parallel.
-	 * For our GP style, we don't have Gather node and keep the partial path in partial_pathlist
+	 * For our CBDB style, we don't have Gather node and keep the partial path in partial_pathlist
 	 * until the last step if possible.
 	 * When we generate two phase limit path or limit has sub partial path,
 	 * the Limit node on QEs could be parallel.

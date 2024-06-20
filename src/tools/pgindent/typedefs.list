@@ -80,11 +80,14 @@ AlterOpFamilyStmt
 AlterOperatorStmt
 AlterOwnerStmt
 AlterPolicyStmt
+AlterProfileStmt
 AlterPublicationStmt
 AlterRoleSetStmt
 AlterRoleStmt
 AlterSeqStmt
 AlterStatsStmt
+AlterStorageServer
+AlterStorageUserMappingStmt
 AlterSubscriptionStmt
 AlterSubscriptionType
 AlterSystemStmt
@@ -472,6 +475,7 @@ CreateOpClassStmt
 CreateOpFamilyStmt
 CreatePLangStmt
 CreatePolicyStmt
+CreateProfileStmt
 CreatePublicationStmt
 CreateRangeStmt
 CreateReplicationSlotCmd
@@ -482,6 +486,8 @@ CreateSeqStmt
 CreateStatsStmt
 CreateStmt
 CreateStmtContext
+CreateStorageServerStmt
+CreateStorageUserMappingStmt
 CreateSubscriptionStmt
 CreateTableAsStmt
 CreateTableSpaceStmt
@@ -566,9 +572,12 @@ DomainConstraintType
 DomainIOData
 DropBehavior
 DropOwnedStmt
+DropProfileStmt
 DropReplicationSlotCmd
 DropRoleStmt
 DropStmt
+DropStorageServer
+DropStorageUserMappingStmt
 DropSubscriptionStmt
 DropTableSpaceStmt
 DropUserMappingStmt

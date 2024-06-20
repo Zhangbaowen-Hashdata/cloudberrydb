@@ -174,6 +174,13 @@ static int	extra_float_digits;
 #define DUMP_DEFAULT_ROWS_PER_INSERT 1
 
 /*
+ * FIXME: CBDB should not know the am oid of PAX. We put here because the kernel
+ * can't distinguish the PAX and renamed heap(heap_psql) in test `psql`.
+ * The definition of temporary is here and should be consistent with util/rel.h
+ */
+#define PAX_AM_OID 7047
+
+/*
  * Macro for producing quoted, schema-qualified name of a dumpable object.
  */
 #define fmtQualifiedDumpable(obj) \
@@ -2098,6 +2105,16 @@ selectDumpableTable(TableInfo *tbinfo, Archive *fout)
 		simple_oid_list_member(&table_exclude_oids,
 							   tbinfo->dobj.catId.oid))
 		tbinfo->dobj.dump = DUMP_COMPONENT_NONE;
+
+	/*
+	 * Pax not support pg_dump yet
+	 */
+	if (tbinfo->amoid == PAX_AM_OID) {
+		tbinfo->dobj.dump = DUMP_COMPONENT_NONE;
+
+		pg_log_warning("unsupport am pax yet, current relation \"%s\" will be ignore",
+					   tbinfo->dobj.name);
+	}
 }
 
 /*
@@ -7387,6 +7404,8 @@ getTables(Archive *fout, int *numTables)
 	int			i_ispartition;
 	int			i_partbound;
 	int			i_amname;
+	int			i_amoid;
+	int			i_isivm;
 
 	/*
 	 * Find all the tables and table-like objects.
@@ -7478,6 +7497,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relminmxid AS tminmxid, "
 						  "c.relpersistence, c.relispopulated, "
 						  "c.relreplident, c.relpages, am.amname, "
+						  "am.oid AS amoid, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
 						  "ELSE 0 END AS foreignserver, "
@@ -7505,7 +7525,8 @@ getTables(Archive *fout, int *numTables)
 						  "AS changed_acl, "
 						  "%s AS partkeydef, "
 						  "%s AS ispartition, "
-						  "%s AS partbound "
+						  "%s AS partbound, "
+						  "c.relisivm AS isivm "
 						  "FROM pg_class c "
 						  "LEFT JOIN pg_depend d ON "
 						  "(c.relkind = '%c' AND "
@@ -8074,6 +8095,8 @@ getTables(Archive *fout, int *numTables)
 	i_ispartition = PQfnumber(res, "ispartition");
 	i_partbound = PQfnumber(res, "partbound");
 	i_amname = PQfnumber(res, "amname");
+	i_amoid = PQfnumber(res, "amoid");
+	i_isivm = PQfnumber(res, "isivm");
 
 	if (dopt->lockWaitTimeout)
 	{
@@ -8164,6 +8187,11 @@ getTables(Archive *fout, int *numTables)
 		else
 			tblinfo[i].amname = pg_strdup(PQgetvalue(res, i, i_amname));
 
+		if (PQgetisnull(res, i, i_amoid))
+			tblinfo[i].amoid = InvalidOid;
+		else
+			tblinfo[i].amoid = atooid(PQgetvalue(res, i, i_amoid));
+
 		/* other fields were zeroed above */
 
 		/*
@@ -8200,6 +8228,7 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].partkeydef = pg_strdup(PQgetvalue(res, i, i_partkeydef));
 		tblinfo[i].ispartition = (strcmp(PQgetvalue(res, i, i_ispartition), "t") == 0);
 		tblinfo[i].partbound = pg_strdup(PQgetvalue(res, i, i_partbound));
+		tblinfo[i].isivm = (strcmp(PQgetvalue(res, i, i_isivm), "t") == 0);
 
 		/* foreign server */
 		tblinfo[i].foreign_server = atooid(PQgetvalue(res, i, i_foreignserver));
@@ -18116,9 +18145,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			}
 		}
 
-		appendPQExpBuffer(q, "CREATE %s%s %s",
+		appendPQExpBuffer(q, "CREATE %s%s%s %s",
 						  tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED ?
 						  "UNLOGGED " : "",
+						  tbinfo->relkind == RELKIND_MATVIEW && tbinfo->isivm ?
+						  "INCREMENTAL " : "",
 						  reltypename,
 						  qualrelname);
 

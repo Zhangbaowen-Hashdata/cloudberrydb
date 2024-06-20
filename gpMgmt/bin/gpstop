@@ -34,6 +34,7 @@ try:
     from gppylib.gp_era import GpEraFile
     from gppylib.operations.utils import ParallelOperation, RemoteOperation
     from gppylib.operations.rebalanceSegments import ReconfigDetectionSQLQueryCommand
+    from gppylib.operations.detect_unreachable_hosts import get_unreachable_segment_hosts
 except ImportError as e:
     sys.exit('ERROR: Cannot import modules.  Please check that you have sourced greenplum_path.sh.  Detail: ' + str(e))
 
@@ -163,7 +164,12 @@ class GpStop:
         """
         self._prepare()
 
+        if self.gparray.get_segment_count() == 0:
+            self.coordinatoronly = True
+
         if self.coordinatoronly:
+            if self.sighup:
+                return self._sighup_cluster()
             if self.interactive:
                 if not userinput.ask_yesno(None, "\nContinue with coordinator-only shutdown", 'N'):
                     raise UserAbortedException()
@@ -180,6 +186,10 @@ class GpStop:
                 self._clean_fts()
                 if self.etcd_hosts is not None:
                     self._clean_etcd()
+            if self.restart:
+                    logger.info("Restarting System...")
+                    gp.NewGpStart.local('restarting system', verbose=logging_is_verbose(), coordinatorOnly=self.coordinatoronly,
+                                        nostandby=not self.stopstandby, coordinatorDirectory=self.coordinator_datadir)
         else:
             if self.sighup:
                 return self._sighup_cluster()
@@ -198,7 +208,7 @@ class GpStop:
 
                 if self.interactive:
                     self._summarize_actions(segs)
-                    if not userinput.ask_yesno(None, "\nContinue with Cloudberry instance shutdown", 'N'):
+                    if not userinput.ask_yesno(None, "\nContinue with CloudberryDB instance shutdown", 'N'):
                         raise UserAbortedException()
 
                 try:
@@ -310,8 +320,8 @@ class GpStop:
 
     ######
     def _check_version(self):
-        self.gpversion = gp.GpVersion.local('local GP software version check', self.gphome)
-        logger.info("Cloudberry Version: '%s'" % self.gpversion)
+        self.gpversion = gp.GpVersion.local('local CloudberryDB version check', self.gphome)
+        logger.info("CloudberryDB Version: '%s'" % self.gpversion)
 
     ######
     def _read_postgresqlconf(self):
@@ -343,11 +353,11 @@ class GpStop:
             pass
         else:
             raise ExceptionNoStackTraceNeeded(
-                'postmaster.pid file does not exist.  is Cloudberry instance already stopped?')
+                'postmaster.pid file does not exist.  is CloudberryDB instance already stopped?')
 
     ######
     def _build_gparray(self):
-        logger.info("Obtaining Cloudberry Coordinator catalog information")
+        logger.info("Obtaining CloudberryDB Coordinator catalog information")
 
         logger.info("Obtaining Segment details from coordinator...")
         self.dburl = dbconn.DbURL(port=self.port, dbname='template1')
@@ -504,6 +514,10 @@ class GpStop:
 
         if self.gparray.standbyCoordinator:
             standby = self.gparray.standbyCoordinator
+
+            if get_unreachable_segment_hosts([standby.hostname], 1):
+                logger.warning("Standby is unreachable, skipping shutdown on standby")
+                return True
 
             logger.info("Stopping coordinator standby host %s mode=%s" % (standby.hostname, self.mode))
             try:
@@ -801,7 +815,7 @@ class GpStop:
         logger.info("--------------------------------------------")
 
         tabLog = TableLogger(logger=logger).setWarnWithArrows(True)
-        tabLog.info(["Coordinator Cloudberry instance process active PID", "= %s" % self.pid])
+        tabLog.info(["Coordinator CloudberryDB instance process active PID", "= %s" % self.pid])
         tabLog.info(["Database", "= %s" % self.dburl.pgdb])
         tabLog.info(["Coordinator port", "= %s" % self.port])
         tabLog.info(["Coordinator directory", "= %s" % self.coordinator_datadir])
@@ -829,7 +843,7 @@ class GpStop:
     @staticmethod
     def createParser():
         parser = OptParser(option_class=OptChecker,
-                           description="Stops a GPDB Array.",
+                           description="Stops a CBDB Array.",
                            version='%prog version $Revision$')
         parser.setHelp([])
 
@@ -861,7 +875,7 @@ class GpStop:
         addTo.add_option('-y', dest="stop_standby", action='store_false', default=True,
                          help='Do not stop the standby coordinator process.')
         addTo.add_option('-u', dest="request_sighup", action='store_true',
-                         help="upload new coordinator postgresql.conf settings, does not stop Cloudberry array," \
+                         help="upload new coordinator postgresql.conf settings, does not stop CloudberryDB array," \
                               "issues a signal to the coordinator segment postmaster process to reload")
 
         addTo.add_option('-B', '--parallel', type="int", default=DEFAULT_NUM_WORKERS, metavar="<parallel_processes>",

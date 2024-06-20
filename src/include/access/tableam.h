@@ -41,6 +41,18 @@ struct TBMIterateResult;
 struct VacuumParams;
 struct ValidateIndexState;
 
+/**
+ * Flags represented the supported features of scan.
+ * 
+ * The first 8 bits are reserved for kernel expansion of some attributes,
+ * and the remaining 24 bits are reserved for custom tableam.
+ * 
+ * If you add a new flag, make sure the flag's bit is consecutive with
+ * the previous one.
+ * 
+*/
+#define SCAN_SUPPORT_COLUMN_ORIENTED_SCAN (1 << 0)  /* support column-oriented scanning*/
+
 /*
  * Bitmask values for the flags argument to the scan_begin callback.
  */
@@ -255,6 +267,17 @@ typedef void (*IndexBuildCallback) (Relation index,
 									void *state);
 
 /*
+ * CBDB: Execution structure shouldn't appear here in PG design. We need to
+ * tell the scan node to do low-level and efficient filtering. The scan node
+ * will use low-level APIs exposed by the storage.
+ */
+struct PlanState;
+
+typedef bytea *(*tamoptions_function)(Datum reloptions,
+									  char relkind,
+									  bool validate);
+
+/*
  * API struct for a table AM.  Note this must be allocated in a
  * server-lifetime manner, typically as a static const struct, which then gets
  * returned by FormData_pg_am.amhandler.
@@ -315,9 +338,9 @@ typedef struct TableAmRoutine
 	 */
 	TableScanDesc	(*scan_begin_extractcolumns) (Relation rel,
 												  Snapshot snapshot,
+												  int nkeys, struct ScanKeyData *key,
 												  ParallelTableScanDesc parallel_scan,
-												  List *targetlist,
-												  List *qual,
+												  struct PlanState *ps,
 												  uint32 flags);
 
 	/*
@@ -378,6 +401,13 @@ typedef struct TableAmRoutine
 	bool		(*scan_getnextslot_tidrange) (TableScanDesc scan,
 											  ScanDirection direction,
 											  TupleTableSlot *slot);
+
+	/*
+	 * This callback is used to indicate what the AM can do, what features the
+	 * AM can support, return the flags represented the supported features of
+	 * scan.
+	 */
+	uint32		(*scan_flags) (Relation rel);
 
 	/* ------------------------------------------------------------------------
 	 * Parallel table scan related functions.
@@ -876,6 +906,35 @@ typedef struct TableAmRoutine
 										   struct SampleScanState *scanstate,
 										   TupleTableSlot *slot);
 
+	/*
+	 * Like scan_sample_next_block and scan_sample_next_tuple, this callback
+	 * is also used to sample tuple rows. As different storage maybe need to
+	 * use different acquire sample rows process, we extend an interface to
+	 * achieve this requirement. 
+	 */
+	int			(*acquire_sample_rows) (Relation onerel, int elevel,
+										HeapTuple *rows, int targrows,
+										double *totalrows, double *totaldeadrows);
+	/*
+	 * This callback is used to parse reloptions for relation/matview/toast.
+	 */
+	bytea       *(*amoptions)(Datum reloptions, char relkind, bool validate);
+
+	/*
+	 * This callback is used to swap internal auxiliary relation if
+	 * the table AM use different layout structure to organize tuples.
+	 *
+	 * Standard heap relation will swap the heap relation itself and optional
+	 * toast relation. Custom table AM could have different data structure,
+	 * like AO-row/AO-col tables have several auxiliary relations.
+	 * This behavior is table AM-specific.
+	 */
+	void		(*swap_relation_files) (Oid relid1, Oid relid2, TransactionId frozenXid, MultiXactId cutoffMulti);
+
+	void		(*validate_column_encoding_clauses) (List *encoding_clause_opts);
+
+	List *		(*transform_column_encoding_clauses) (Relation, List *encoding_opts, bool validate, bool optionFromType);
+
 } TableAmRoutine;
 
 
@@ -925,8 +984,10 @@ table_beginscan(Relation rel, Snapshot snapshot,
  * Like table_beginscan_parallel, it will be parallel mode if parallel_scan is not NULL.
  */
 static inline TableScanDesc
-table_beginscan_es(Relation relation, Snapshot snapshot, ParallelTableScanDesc parallel_scan,
-				   List *targetList, List *qual)
+table_beginscan_es(Relation relation, Snapshot snapshot,
+				   int nkeys, struct ScanKeyData *key,
+				   ParallelTableScanDesc parallel_scan,
+				   struct PlanState *ps)
 {
 	bool isParallel = parallel_scan != NULL;
 	uint32		flags = SO_TYPE_SEQSCAN |
@@ -951,12 +1012,13 @@ table_beginscan_es(Relation relation, Snapshot snapshot, ParallelTableScanDesc p
 	}
 
 	if (relation->rd_tableam->scan_begin_extractcolumns)
-		return relation->rd_tableam->scan_begin_extractcolumns(relation, snapshot, parallel_scan,
-														  targetList, qual,
-														  flags);
+		return relation->rd_tableam->scan_begin_extractcolumns(relation, snapshot,
+															   nkeys, key,
+															   parallel_scan,
+															   ps, flags);
 
 	return relation->rd_tableam->scan_begin(relation, snapshot,
-									   0, NULL,
+									   nkeys, key,
 									   parallel_scan, flags);
 }
 
@@ -1195,6 +1257,16 @@ table_scan_getnextslot_tidrange(TableScanDesc sscan, ScanDirection direction,
 															   slot);
 }
 
+/*
+ * Return the flags represented the supported features of table AM scan.
+ */
+static inline uint32
+table_scan_flags(Relation rel)
+{
+	if (rel->rd_tableam->scan_flags)
+		return rel->rd_tableam->scan_flags(rel);
+	return 0;
+}
 
 /* ----------------------------------------------------------------------------
  * Parallel table scan related functions.
@@ -2179,8 +2251,18 @@ extern void table_block_relation_estimate_size(Relation rel,
  */
 
 extern const TableAmRoutine *GetTableAmRoutine(Oid amhandler);
+extern const TableAmRoutine *GetTableAmRoutineByAmId(Oid amoid);
 extern const TableAmRoutine *GetHeapamTableAmRoutine(void);
 extern bool check_default_table_access_method(char **newval, void **extra,
 											  GucSource source);
+
+/* ----------------------------------------------------------------------------
+ * Hook function to run init/fini for storage extensions
+ * ----------------------------------------------------------------------------
+ */
+enum CmdType;
+typedef void (*ext_dml_func_hook_type) (Relation relation, enum CmdType operation);
+extern PGDLLIMPORT ext_dml_func_hook_type ext_dml_init_hook;
+extern PGDLLIMPORT ext_dml_func_hook_type ext_dml_finish_hook;
 
 #endif							/* TABLEAM_H */

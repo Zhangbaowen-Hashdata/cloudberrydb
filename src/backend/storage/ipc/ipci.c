@@ -30,6 +30,7 @@
 #include "cdb/cdblocaldistribxact.h"
 #include "cdb/cdbvars.h"
 #include "commands/async.h"
+#include "commands/matview.h"
 #include "crypto/kmgr.h"
 #include "executor/nodeShareInputScan.h"
 #include "miscadmin.h"
@@ -39,6 +40,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/fts.h"
+#include "postmaster/loginmonitor.h"
 #include "replication/logicallauncher.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
@@ -156,7 +158,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, LockShmemSize());
 		size = add_size(size, PredicateLockShmemSize());
 
-		if (IsResQueueEnabled() && Gp_role == GP_ROLE_DISPATCH)
+		if (IsResQueueEnabled() && (Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()))
 		{
 			size = add_size(size, ResSchedulerShmemSize());
 			size = add_size(size, ResPortalIncrementShmemSize());
@@ -185,6 +187,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, ProcSignalShmemSize());
 		size = add_size(size, CheckpointerShmemSize());
 		size = add_size(size, AutoVacuumShmemSize());
+		size = add_size(size, LoginMonitorShmemSize());
 		size = add_size(size, ReplicationSlotsShmemSize());
 		size = add_size(size, ReplicationOriginShmemSize());
 		size = add_size(size, WalSndShmemSize());
@@ -242,6 +245,7 @@ CreateSharedMemoryAndSemaphores(void)
 		/* size of standby promote flags */
 		size = add_size(size, ShmemStandbyPromoteReadySize());
 #endif
+		size = add_size(size, mv_TableShmemSize());
 		elog(DEBUG3, "invoking IpcMemoryCreate(size=%zu)", size);
 
 		/*
@@ -365,6 +369,7 @@ CreateSharedMemoryAndSemaphores(void)
 	ProcSignalShmemInit();
 	CheckpointerShmemInit();
 	AutoVacuumShmemInit();
+	LoginMonitorShmemInit();
 	ReplicationSlotsShmemInit();
 	ReplicationOriginShmemInit();
 	WalSndShmemInit();

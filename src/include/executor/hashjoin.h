@@ -4,6 +4,7 @@
  *	  internal structures for hash joins
  *
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 2007-2008, Greenplum inc
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -286,6 +287,7 @@ typedef struct ParallelHashJoinState
 	Barrier		grow_buckets_barrier;
 	Barrier		sync_barrier;
 	Barrier		batch0_barrier;
+	Barrier		outer_motion_barrier;
 	volatile 	bool	phs_lasj_has_null; 	/* LASJ has found null value, identify early quit */
 	pg_atomic_uint32 distributor;	/* counter for load balancing */
 

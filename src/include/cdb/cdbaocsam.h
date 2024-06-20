@@ -74,7 +74,6 @@ typedef struct AOCSInsertDescData
 	/*
 	 * For multiple segment files insertion.
 	 */
-	bool			insertMultiFiles; /* insert into multi files */
 	dlist_node		node;	/* node of segfiles list */
 	int 			range;  /* inserted tuples of each range */
 	/* flag for insert placeholder in unique index   */
@@ -289,7 +288,10 @@ typedef struct AOCSDeleteDescData *AOCSDeleteDesc;
 typedef struct AOCSUniqueCheckDescData
 {
 	AppendOnlyBlockDirectory *blockDirectory;
+	/* visimap to check for deleted tuples as part of INSERT/COPY */
 	AppendOnlyVisimap 		 *visimap;
+	/* visimap support structure to check for deleted tuples as part of UPDATE */
+	AppendOnlyVisimapDelete  *visiMapDelete;
 } AOCSUniqueCheckDescData;
 
 typedef struct AOCSUniqueCheckDescData *AOCSUniqueCheckDesc;

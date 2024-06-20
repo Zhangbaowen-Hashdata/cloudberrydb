@@ -60,7 +60,6 @@
 
 #include "cdb/cdbappendonlyam.h"
 #include "cdb/cdbrelsize.h"
-#include "cdb/cdbutil.h"
 #include "catalog/pg_appendonly.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_inherits.h"
@@ -311,7 +310,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			/*
 			 * Fetch the ordering information for the index, if any.
 			 */
-			if (info->relam == BTREE_AM_OID)
+			if (IsIndexAccessMethod(info->relam, BTREE_AM_OID))
 			{
 				/*
 				 * If it's a btree index, we can use its opfamily OIDs
@@ -436,7 +435,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->tuples > rel->tuples)
 				info->tuples = rel->tuples;
 
-			if (info->relam == BTREE_AM_OID)
+			if (IsIndexAccessMethod(info->relam, BTREE_AM_OID))
 			{
 				/* For btrees, get tree height while we have the index open */
 				info->tree_height = _bt_getrootheight(indexRelation);
@@ -472,14 +471,12 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		rel->serverid = GetForeignServerIdByRelId(RelationGetRelid(relation));
 		rel->fdwroutine = GetFdwRoutineForRelation(relation, true);
 		rel->exec_location = GetForeignTable(RelationGetRelid(relation))->exec_location;
-		rel->num_segments = GetForeignTable(RelationGetRelid(relation))->num_segments;
 	}
 	else
 	{
 		rel->serverid = InvalidOid;
 		rel->fdwroutine = NULL;
 		rel->exec_location = FTEXECLOCATION_NOT_DEFINED;
-		rel->num_segments = getgpsegmentCount();
 	}
 
 	/* Collect info about relation's foreign keys, if relevant */
@@ -490,6 +487,12 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 		relation->rd_tableam->scan_set_tidrange != NULL &&
 		relation->rd_tableam->scan_getnextslot_tidrange != NULL)
 		rel->amflags |= AMFLAG_HAS_TID_RANGE;
+
+	/* Collect info about relation's store information, if it support column-oriented scan  */
+	if (relation->rd_tableam && relation->rd_tableam->scan_flags && 
+		(relation->rd_tableam->scan_flags(relation) & SCAN_SUPPORT_COLUMN_ORIENTED_SCAN)) {
+		rel->amflags |= AMFLAG_HAS_COLUMN_ORIENTED_SCAN;
+	}
 
 	/*
 	 * Collect info about relation's partitioning scheme, if any. Only
@@ -1202,6 +1205,7 @@ estimate_rel_size(Relation rel, int32 *attr_widths,
 	switch (rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
+		case RELKIND_DIRECTORY_TABLE:
 		case RELKIND_MATVIEW:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_AOSEGMENTS:

@@ -823,6 +823,8 @@ static inline void planner_subplan_put_plan(struct PlannerInfo *root, SubPlan *s
 
 /* Bitmask of flags supported by table AMs */
 #define AMFLAG_HAS_TID_RANGE (1 << 0)
+/* Column-oriented scanning of flags supported by table AMs */
+#define AMFLAG_HAS_COLUMN_ORIENTED_SCAN (1 << 1)
 
 typedef enum RelOptKind
 {
@@ -922,8 +924,7 @@ typedef struct RelOptInfo
 	Oid			serverid;		/* identifies server for the table or join */
 	Oid			userid;			/* identifies user to check access as */
 	bool		useridiscurrent;	/* join is only valid for current user */
-	char		exec_location;  /* execute on MASTER, ANY or ALL SEGMENTS, Cloudberry MPP specific */
-	int32		num_segments;  /* number of segments, Cloudberry MPP specific */
+	char		exec_location;  /* execute on MASTER, ANY or ALL SEGMENTS, Greenplum MPP specific */
 	/* use "struct FdwRoutine" to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine;
 	void	   *fdw_private;

@@ -22,6 +22,14 @@ SEG_PREFIX=demoDataDir
 STANDBYDIR=$DATADIRS/standby
 EXTERNAL_FTS_ENABLED="false"
 
+SINGLENODE_OPTS=""
+SINGLENODE_MODE=""
+if [ "${NUM_PRIMARY_MIRROR_PAIRS}" -eq "0" ]; then
+    SINGLENODE_MODE="true"
+    SINGLENODE_OPTS="--singlenodeMode=true"
+    QDDIR=$DATADIRS/singlenodedir
+fi
+
 # ======================================================================
 # Database Ports
 # ======================================================================
@@ -94,16 +102,6 @@ checkDemoConfig(){
     return 0
 }
 
-USAGE(){
-    echo ""
-    echo " `basename $0` {-c | -d | -u} <-K>"
-    echo " -c : Check if demo is possible."
-    echo " -d : Delete the demo."
-    echo " -K : Create cluster without data checksums."
-    echo " -u : Usage, prints this message."
-    echo ""
-}
-
 #
 # Clean up the demo
 #
@@ -132,6 +130,10 @@ cleanDemo(){
             echo "Deleting clusterConfigFile"
             rm -f clusterConfigFile
         fi
+        if [ -f clusterConfigPostgresAddonsFile ];  then
+            echo "Deleting clusterConfigPostgresAddonsFile"
+            rm -f clusterConfigPostgresAddonsFile
+        fi
         if [ -d ${DATADIRS} ];  then
             echo "Deleting ${DATADIRS}"
             rm -rf ${DATADIRS}
@@ -147,10 +149,9 @@ cleanDemo(){
 # Main Section
 #*****************************************************************************
 
-while getopts ":cdK'?'" opt
+while getopts ":cdK" opt
 do
-	case $opt in 
-		'?' ) USAGE ;;
+	case $opt in
         c) checkDemoConfig
            RETVAL=$?
            if [ $RETVAL -ne 0 ]; then
@@ -165,9 +166,7 @@ do
         K) DATACHECKSUMS=0
            shift
            ;;
-        *) USAGE
-           exit 0
-           ;;
+        *) USAGE; exit 1;;
 	esac
 done
 
@@ -175,7 +174,7 @@ if [ -z "${GPHOME}" ]; then
     echo "FATAL: The GPHOME environment variable is not set."
     echo ""
     echo "  You can set it by sourcing the greenplum_path.sh"
-    echo "  file in your Cloudberry installation directory."
+    echo "  file in your CloudberryDB installation directory."
     echo ""
     exit 1
 fi
@@ -215,17 +214,17 @@ GPPATH=`find -H $GPHOME -name gpstart| tail -1`
 RETVAL=$?
 
 if [ "$RETVAL" -ne 0 ]; then
-    echo "Error attempting to find Cloudberry executables in $GPHOME"
+    echo "Error attempting to find CloudberryDB executables in $GPHOME"
     exit 1
 fi
 
 if [ ! -x "$GPPATH" ]; then
-    echo "No executables found for Cloudberry installation in $GPHOME"
+    echo "No executables found for CloudberryDB installation in $GPHOME"
     exit 1
 fi
 GPPATH=`dirname $GPPATH`
 if [ ! -x $GPPATH/gpinitsystem ]; then
-    echo "No mgmt executables(gpinitsystem) found for Cloudberry installation in $GPPATH"
+    echo "No mgmt executables(gpinitsystem) found for CloudberryDB installation in $GPPATH"
     exit 1
 fi
 
@@ -294,7 +293,7 @@ cat >> $CLUSTER_CONFIG <<-EOF
 	COORDINATOR_PORT=${COORDINATOR_DEMO_PORT}
 	
 	# Shell to use to execute commands on all hosts
-	TRUSTED_SHELL="`pwd`/lalshell"
+	TRUSTED_SHELL="$(dirname "$0")/lalshell"
 	
 	ENCODING=UNICODE
 EOF
@@ -391,33 +390,33 @@ if [ -f "${CLUSTER_CONFIG_POSTGRES_ADDONS}" ]; then
     if [ $EXTERNAL_FTS_ENABLED == "true" ]; then
         echo "=========================================================================================="
         echo "executing:"
-        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -U 1 -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} \"$@\""
+        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -U 1 -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} \"$@\""
         echo "=========================================================================================="
         echo ""
-        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -U 1 -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} "$@"        
+        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -U 1 -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} "$@"
     else
         echo "=========================================================================================="
         echo "executing:"
-        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} \"$@\""
+        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} \"$@\""
         echo "=========================================================================================="
         echo ""
-        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} "$@"
+        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs -p ${CLUSTER_CONFIG_POSTGRES_ADDONS} ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} "$@"
     fi
 else
     if [ $EXTERNAL_FTS_ENABLED == "true" ]; then
         echo "=========================================================================================="
         echo "executing:"
-        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -U 1 -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} \"$@\""
+        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -U 1 -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} \"$@\""
         echo "=========================================================================================="
         echo ""
-        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -U 1 -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} "$@"
+        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -U 1 -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} "$@"
     else
         echo "=========================================================================================="
         echo "executing:"
-        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} \"$@\""
+        echo "  $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} \"$@\""
         echo "=========================================================================================="
         echo ""
-        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} "$@"
+        $GPPATH/gpinitsystem -a -c $CLUSTER_CONFIG -l $DATADIRS/gpAdminLogs ${STANDBY_INIT_OPTS} ${SINGLENODE_OPTS} "$@"
     fi
 fi
 RETURN=$?
@@ -479,6 +478,7 @@ cat > gpdemo-env.sh <<-EOF
 	export PGPORT=${COORDINATOR_DEMO_PORT}
 	export COORDINATOR_DATA_DIRECTORY=$QDDIR/${SEG_PREFIX}-1
 	export MASTER_DATA_DIRECTORY=$QDDIR/${SEG_PREFIX}-1
+	export NUM_PRIMARY_MIRROR_PAIRS=${NUM_PRIMARY_MIRROR_PAIRS}
 EOF
 
 if [ "${RETURN}" -gt 1 ];

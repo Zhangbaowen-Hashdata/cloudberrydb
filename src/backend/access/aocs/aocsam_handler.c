@@ -3,6 +3,7 @@
  * aocsam_handler.c
  *	  Append only columnar access methods handler
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 2009-2010, Greenplum Inc.
  * Portions Copyright (c) 2012-Present VMware, Inc. or its affiliates.
  *
@@ -18,6 +19,7 @@
 #include "access/appendonlywriter.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
+#include "access/reloptions.h"
 #include "access/tableam.h"
 #include "access/tsmapi.h"
 #include "access/xact.h"
@@ -30,9 +32,11 @@
 #include "catalog/storage_xlog.h"
 #include "cdb/cdbaocsam.h"
 #include "cdb/cdbvars.h"
+#include "commands/defrem.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "executor/executor.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "pgstat.h"
 #include "storage/lmgr.h"
@@ -88,9 +92,18 @@ typedef struct AOCODMLState
 {
 	Oid				relationOid;
 	AOCSInsertDesc	insertDesc;
-	dlist_head		head; // Head of multiple segment files insertion list.
 	AOCSDeleteDesc	deleteDesc;
 	AOCSUniqueCheckDesc uniqueCheckDesc;
+	/*
+	 * CBDB_PARALLEL
+	 * head: the Head of multiple segment files insertion list.
+	 * insertMultiFiles: number of seg files to be inserted into.
+	 * used_segment_files: used to avoid used files when asking
+	 * for a new segment file.
+	 */
+	dlist_head		head;
+	int 			insertMultiFiles;
+	List* 			used_segment_files;
 } AOCODMLState;
 
 static void reset_state_cb(void *arg);
@@ -191,6 +204,8 @@ enter_dml_state(const Oid relationOid)
 	state->insertDesc = NULL;
 	state->deleteDesc = NULL;
 	state->uniqueCheckDesc = NULL;
+	state->insertMultiFiles = 0;
+	state->used_segment_files = NIL;
 	dlist_init(&state->head);
 
 	Assert(!found);
@@ -311,8 +326,8 @@ aoco_dml_finish(Relation relation, CmdType operation)
 		state->uniqueCheckDesc->blockDirectory = NULL;
 
 		/*
-		 * If this fetch is a part of an update, then we have been reusing the
-		 * visimap used by the delete half of the update, which would have
+		 * If this fetch is a part of an UPDATE, then we have been reusing the
+		 * visimapDelete used by the delete half of the UPDATE, which would have
 		 * already been cleaned up above. Clean up otherwise.
 		 */
 		if (!had_delete_desc)
@@ -321,6 +336,7 @@ aoco_dml_finish(Relation relation, CmdType operation)
 			pfree(state->uniqueCheckDesc->visimap);
 		}
 		state->uniqueCheckDesc->visimap = NULL;
+		state->uniqueCheckDesc->visiMapDelete = NULL;
 
 		pfree(state->uniqueCheckDesc);
 		state->uniqueCheckDesc = NULL;
@@ -336,53 +352,44 @@ get_insert_descriptor(const Relation relation)
 {
 	AOCODMLState *state;
 	AOCSInsertDesc next = NULL;
+	MemoryContext oldcxt;
 
 	state = find_dml_state(RelationGetRelid(relation));
-
+	oldcxt = MemoryContextSwitchTo(aocoLocal.stateCxt);
 	if (state->insertDesc == NULL)
 	{
-		List	*segments = NIL;
-		MemoryContext oldcxt;
 
-		oldcxt = MemoryContextSwitchTo(aocoLocal.stateCxt);
+		/*
+		 * CBDB_PARALLEL:
+		 * Should not enable insertMultiFiles if the table is created by own transaction
+		 * or in utility mode.
+		 */
+		if (Gp_role != GP_ROLE_UTILITY &&
+			gp_appendonly_insert_files > 1 &&
+			!ShouldUseReservedSegno(relation, CHOOSE_MODE_WRITE))
+			state->insertMultiFiles = gp_appendonly_insert_files;
+
 		state->insertDesc = aocs_insert_init(relation,
 									  ChooseSegnoForWrite(relation));
-		
+
+		state->used_segment_files = list_make1_int(state->insertDesc->cur_segno);
 		dlist_init(&state->head);
-		dlist_head *head = &state->head;
-		dlist_push_tail(head, &state->insertDesc->node);
+		dlist_push_tail(&state->head, &state->insertDesc->node);
 
-		if (state->insertDesc->insertMultiFiles)
-		{
-			segments = lappend_int(segments, state->insertDesc->cur_segno);
-			for (int i = 0; i < gp_appendonly_insert_files - 1; i++)
-			{
-				next = aocs_insert_init(relation,
-												 ChooseSegnoForWriteMultiFile(relation, segments));
-				dlist_push_tail(head, &next->node);
-				segments = lappend_int(segments, next->cur_segno);
-			}
-			list_free(segments);
-		}
-
-		//* mark all insertDesc  placeholderInserted with false */
-        if (relationHasUniqueIndex(relation))
-        {
-            dlist_iter          iter;
-            dlist_foreach(iter, head)
-            {
-                AOCSInsertDesc insertDesc = (AOCSInsertDesc)dlist_container(AOCSInsertDescData, node, iter.cur);
-                insertDesc->placeholderInserted = false;
-            }
-        }
-
-		MemoryContextSwitchTo(oldcxt);
 	}
 
 	/* switch insertDesc */
-	if (state->insertDesc->insertMultiFiles && state->insertDesc->range == gp_appendonly_insert_files_tuples_range)
+	if (state->insertMultiFiles && state->insertDesc->range == gp_appendonly_insert_files_tuples_range)
 	{
 		state->insertDesc->range = 0;
+
+		if (list_length(state->used_segment_files) < state->insertMultiFiles)
+		{
+			next = aocs_insert_init(relation, ChooseSegnoForWriteMultiFile(relation, state->used_segment_files));
+			dlist_push_tail(&state->head, &next->node);
+			state->used_segment_files = lappend_int(state->used_segment_files, next->cur_segno);
+		}
+
 		if (!dlist_has_next(&state->head, &state->insertDesc->node))
 			next = (AOCSInsertDesc)dlist_container(AOCSInsertDescData, node, dlist_head_node(&state->head));
 		else
@@ -431,6 +438,7 @@ get_insert_descriptor(const Relation relation)
 												firstNonDroppedColumn);
 		insertDesc->placeholderInserted = true;
 	}
+	MemoryContextSwitchTo(oldcxt);
 	return state->insertDesc;
 }
 
@@ -492,18 +500,29 @@ get_or_create_unique_check_desc(Relation relation, Snapshot snapshot)
 													  relation,
 													  relation->rd_att->natts, /* numColGroups */
 													  snapshot);
+
 		/*
-		 * If this is part of an update, we need to reuse the visimap used by
-		 * the delete half of the update. This is to avoid spurious conflicts
-		 * when the key's previous and new value are identical. Using the
-		 * visimap from the delete half ensures that the visimap can recognize
-		 * any tuples deleted by us prior to this insert, within this command.
+		 * If this is part of an UPDATE, we need to reuse the visimapDelete
+		 * support structure from the delete half of the update. This is to
+		 * avoid spurious conflicts when the key's previous and new value are
+		 * identical. Using it ensures that we can recognize any tuples deleted
+		 * by us prior to this insert, within this command.
+		 *
+		 * Note: It is important that we reuse the visimapDelete structure and
+		 * not the visimap structure. This is because, when a uniqueness check
+		 * is performed as part of an UPDATE, visimap changes aren't persisted
+		 * yet (they are persisted at dml_finish() time, see
+		 * AppendOnlyVisimapDelete_Finish()). So, if we use the visimap
+		 * structure, we would not necessarily see all the changes.
 		 */
 		if (state->deleteDesc)
-			uniqueCheckDesc->visimap = &state->deleteDesc->visibilityMap;
+		{
+			uniqueCheckDesc->visiMapDelete = &state->deleteDesc->visiMapDelete;
+			uniqueCheckDesc->visimap = NULL;
+		}
 		else
 		{
-			/* Initialize the visimap */
+			/* COPY/INSERT: Initialize the visimap */
 			uniqueCheckDesc->visimap = palloc0(sizeof(AppendOnlyVisimap));
 			AppendOnlyVisimap_Init_forUniqueCheck(uniqueCheckDesc->visimap,
 												  relation,
@@ -585,12 +604,14 @@ extractcolumns_from_node(Node *expr, bool *cols, AttrNumber natts)
 }
 
 static TableScanDesc
-aoco_beginscan_extractcolumns(Relation rel, Snapshot snapshot, ParallelTableScanDesc parallel_scan,
-							  List *targetlist, List *qual,
-							  uint32 flags)
+aoco_beginscan_extractcolumns(Relation rel, Snapshot snapshot, int nkeys, struct ScanKeyData *key,
+							  ParallelTableScanDesc parallel_scan,
+							  PlanState *ps, uint32 flags)
 {
 	AOCSScanDesc	aoscan;
 	AttrNumber		natts = RelationGetNumberOfAttributes(rel);
+	List *targetlist = ps->plan->targetlist;
+	List *qual = ps->plan->qual;
 	bool		   *cols;
 	bool			found = false;
 
@@ -614,6 +635,9 @@ aoco_beginscan_extractcolumns(Relation rel, Snapshot snapshot, ParallelTableScan
 							flags);
 
 	pfree(cols);
+
+	if (gp_enable_predicate_pushdown)
+		ps->qual = aocs_predicate_pushdown_prepare(aoscan, qual, ps->qual, ps->ps_ExprContext, ps);
 
 	return (TableScanDesc)aoscan;
 }
@@ -745,6 +769,12 @@ aoco_getnextslot(TableScanDesc scan, ScanDirection direction, TupleTableSlot *sl
 	return false;
 }
 
+static uint32
+aoco_scan_flags(Relation rel)
+{
+	return SCAN_SUPPORT_COLUMN_ORIENTED_SCAN;
+}
+
 static Size
 aoco_parallelscan_estimate(Relation rel)
 {
@@ -795,7 +825,7 @@ aoco_index_fetch_reset(IndexFetchTableData *scan)
 	 * Unlike Heap, we don't release the resources (fetch descriptor and its
 	 * members) here because it is more like a global data structure shared
 	 * across scans, rather than an iterator to yield a granularity of data.
-	 * 
+	 *
 	 * Additionally, should be aware of that no matter whether allocation or
 	 * release on fetch descriptor, it is considerably expensive.
 	 */
@@ -976,8 +1006,9 @@ aoco_index_unique_check(Relation rel,
 	if (TransactionIdIsValid(snapshot->xmin) || TransactionIdIsValid(snapshot->xmax))
 		return true;
 
-	/* Now, consult the visimap */
-	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visimap,
+	/* Now, perform a visibility check against the visimap infrastructure */
+	visible = AppendOnlyVisimap_UniqueCheck(uniqueCheckDesc->visiMapDelete,
+											uniqueCheckDesc->visimap,
 											aoTupleId,
 											snapshot);
 
@@ -1255,7 +1286,8 @@ aoco_relation_set_new_filenode(Relation rel,
 	{
 		Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
 			   rel->rd_rel->relkind == RELKIND_MATVIEW ||
-			   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
+			   rel->rd_rel->relkind == RELKIND_TOASTVALUE ||
+			   rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE);
 		smgrcreate(srel, INIT_FORKNUM, false);
 		log_smgrcreate(newrnode, INIT_FORKNUM, SMGR_AO);
 		smgrimmedsync(srel, INIT_FORKNUM);
@@ -1609,8 +1641,8 @@ aoco_index_build_range_scan(Relation heapRelation,
 
 	/* Appendoptimized catalog tables are not supported. */
 	Assert(!is_system_catalog);
-	/* Appendoptimized tables have no data on master. */
-	if (IS_QUERY_DISPATCHER())
+	/* Appendoptimized tables have no data on master unless we are in singlenode mode. */
+	if (IS_QUERY_DISPATCHER() && Gp_role != GP_ROLE_UTILITY)
 		return 0;
 
 	/* See whether we're verifying uniqueness/exclusion properties */
@@ -2170,6 +2202,196 @@ aoco_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 	return ret;
 }
 
+static void
+aoco_swap_relation_files(Oid relid1, Oid relid2,
+						 TransactionId  frozenXid pg_attribute_unused(),
+						 MultiXactId cutoffMulti pg_attribute_unused())
+{
+	SwapAppendonlyEntries(relid1, relid2);
+}
+
+static void
+aoco_validate_column_encoding_clauses(List *aocoColumnEncoding)
+{
+	validateAOCOColumnEncodingClauses(aocoColumnEncoding);
+}
+
+static List *
+aoco_transform_column_encoding_clauses(Relation rel, List *aocoColumnEncoding,
+									   bool validate,
+									   bool optionFromType pg_attribute_unused())
+{
+	ListCell   *lc;
+	DefElem	   *dl;
+	bool foundCompressType = false;
+	bool foundCompressTypeNone = false;
+	char *cmplevel = NULL;
+	bool foundBlockSize = false;
+	char *arg;
+	List *retList = list_copy(aocoColumnEncoding);
+	DefElem *el;
+	const StdRdOptions *ao_opts = currentAOStorageOptions();
+
+	int32		blocksize = -1;
+	int16		compresslevel = 0;
+	char	   *compresstype = NULL;
+	NameData	compresstype_nd;
+
+	foreach(lc, aocoColumnEncoding)
+	{
+		dl = (DefElem *) lfirst(lc);
+		if (pg_strncasecmp(dl->defname, SOPT_CHECKSUM, strlen(SOPT_CHECKSUM)) == 0)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("\"%s\" is not a column specific option",
+							SOPT_CHECKSUM)));
+		}
+	}
+
+	foreach(lc, aocoColumnEncoding)
+	{
+		el = lfirst(lc);
+
+		if (pg_strcasecmp("compresstype", el->defname) == 0)
+		{
+			foundCompressType = true;
+			arg = defGetString(el);
+			if (pg_strcasecmp("none", arg) == 0)
+				foundCompressTypeNone = true;
+		}
+		else if (pg_strcasecmp("compresslevel", el->defname) == 0)
+		{
+			cmplevel = defGetString(el);
+		}
+		else if (pg_strcasecmp("blocksize", el->defname) == 0)
+			foundBlockSize = true;
+	}
+
+	/*
+	 * if rel is not NULL, the function is called for ADD COLUMN.
+	 * table setting in pg_appendonly is preferred over default
+	 * options in GUC gp_default_storage_option.
+	 */
+	if (rel)
+	{
+		GetAppendOnlyEntryAttributes(RelationGetRelid(rel),
+									 &blocksize,
+									 NULL,
+									 &compresslevel,
+									 NULL,
+									 &compresstype_nd);
+		compresstype = NameStr(compresstype_nd);
+	}
+
+	if (!foundCompressType && rel && compresstype[0])
+	{
+		el = makeDefElem("compresstype", (Node *) makeString(pstrdup(compresstype)), -1);
+		retList = lappend(retList, el);
+		if (compresslevel == 0 && ao_opts->compresslevel != 0)
+			compresslevel = ao_opts->compresslevel;
+
+		if (compresslevel != 0)
+		{
+			el = makeDefElem("compresslevel",
+							 (Node *) makeInteger(compresslevel),
+							 -1);
+			retList = lappend(retList, el);
+		}
+	}
+	else if (!foundCompressType && cmplevel == NULL)
+	{
+		/* No compression option specified, use current defaults. */
+		arg = ao_opts->compresstype[0] ?
+			   pstrdup(ao_opts->compresstype) : "none";
+		el = makeDefElem("compresstype", (Node *) makeString(arg), -1);
+		retList = lappend(retList, el);
+		el = makeDefElem("compresslevel",
+						 (Node *) makeInteger(ao_opts->compresslevel),
+						 -1);
+		retList = lappend(retList, el);
+	}
+	else if (!foundCompressType && cmplevel)
+	{
+		if (strcmp(cmplevel, "0") == 0)
+		{
+			/*
+			 * User wants to disable compression by specifying
+			 * compresslevel=0.
+			 */
+			el = makeDefElem("compresstype", (Node *) makeString("none"), -1);
+			retList = lappend(retList, el);
+		}
+		else
+		{
+			/*
+			 * User wants to enable compression by specifying non-zero
+			 * compresslevel.  Therefore, choose default compresstype
+			 * if configured, otherwise use zlib.
+			 */
+			if (ao_opts->compresstype[0] &&
+				strcmp(ao_opts->compresstype, "none") != 0)
+			{
+				arg = pstrdup(ao_opts->compresstype);
+			}
+			else
+			{
+				arg = AO_DEFAULT_COMPRESSTYPE;
+			}
+			el = makeDefElem("compresstype", (Node *) makeString(arg), -1);
+			retList = lappend(retList, el);
+		}
+	}
+	else if (foundCompressType && cmplevel == NULL)
+	{
+		if (foundCompressTypeNone)
+		{
+			/*
+			 * User wants to disable compression by specifying
+			 * compresstype=none.
+			 */
+			el = makeDefElem("compresslevel", (Node *) makeInteger(0), -1);
+			retList = lappend(retList, el);
+		}
+		else
+		{
+			/*
+			 * Valid compresstype specified.  Use default
+			 * compresslevel if it's non-zero, otherwise use 1.
+			 */
+			el = makeDefElem("compresslevel",
+							 (Node *) makeInteger(ao_opts->compresslevel > 0 ?
+												 ao_opts->compresslevel : 1),
+							 -1);
+			retList = lappend(retList, el);
+		}
+	}
+
+	if (foundBlockSize == false)
+	{
+		if (blocksize <= 0)
+			blocksize = ao_opts->blocksize;
+		el = makeDefElem("blocksize", (Node *) makeInteger(blocksize), -1);
+		retList = lappend(retList, el);
+	}
+	/*
+	 * The following two statements validate that the encoding clause is well
+	 * formed.
+	 */
+	if (validate)
+	{
+		Datum		d;
+
+		d = transformRelOptions(PointerGetDatum(NULL),
+								retList,
+								NULL, NULL,
+								true, false);
+		(void) default_reloptions(d, true, RELOPT_KIND_APPENDOPTIMIZED);
+	}
+
+	return retList;
+}
+
 /* ------------------------------------------------------------------------
  * Definition of the AO_COLUMN table access method.
  *
@@ -2200,6 +2422,7 @@ static TableAmRoutine ao_column_methods = {
 	.scan_end = aoco_endscan,
 	.scan_rescan = aoco_rescan,
 	.scan_getnextslot = aoco_getnextslot,
+	.scan_flags = aoco_scan_flags,
 
 	.parallelscan_estimate = aoco_parallelscan_estimate,
 	.parallelscan_initialize = aoco_parallelscan_initialize,
@@ -2244,7 +2467,13 @@ static TableAmRoutine ao_column_methods = {
 	.scan_bitmap_next_block = aoco_scan_bitmap_next_block,
 	.scan_bitmap_next_tuple = aoco_scan_bitmap_next_tuple,
 	.scan_sample_next_block = aoco_scan_sample_next_block,
-	.scan_sample_next_tuple = aoco_scan_sample_next_tuple
+	.scan_sample_next_tuple = aoco_scan_sample_next_tuple,
+	.acquire_sample_rows = acquire_sample_rows,
+
+	.amoptions = ao_amoptions,
+	.swap_relation_files = aoco_swap_relation_files,
+	.validate_column_encoding_clauses = aoco_validate_column_encoding_clauses,
+	.transform_column_encoding_clauses = aoco_transform_column_encoding_clauses,
 };
 
 Datum

@@ -43,6 +43,7 @@
 #include "catalog/pg_compression.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_directory_table.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
@@ -66,6 +67,7 @@
 #include "commands/comment.h"
 #include "commands/createas.h"
 #include "commands/defrem.h"
+#include "commands/matview.h"
 #include "commands/event_trigger.h"
 #include "commands/policy.h"
 #include "commands/sequence.h"
@@ -185,6 +187,12 @@ static const struct dropmsgstrings dropmsgstringarray[] = {
 		gettext_noop("table \"%s\" does not exist, skipping"),
 		gettext_noop("\"%s\" is not a table"),
 	gettext_noop("Use DROP TABLE to remove a table.")},
+	{RELKIND_DIRECTORY_TABLE,
+		ERRCODE_UNDEFINED_TABLE,
+		gettext_noop("directory table \"%s\" does not exist"),
+		gettext_noop("directory table \"%s\" does not exist, skipping"),
+		gettext_noop("\"%s\" is not a directory table"),
+		gettext_noop("Use DROP DIRECTORY TABLE to remove a directory table.")},
 	{RELKIND_SEQUENCE,
 		ERRCODE_UNDEFINED_TABLE,
 		gettext_noop("sequence \"%s\" does not exist"),
@@ -258,6 +266,7 @@ struct DropRelationCallbackState
 #define		ATT_COMPOSITE_TYPE		0x0010
 #define		ATT_FOREIGN_TABLE		0x0020
 #define		ATT_PARTITIONED_INDEX	0x0040
+#define		ATT_DIRECTORY_TABLE		0x0080
 
 /*
  * ForeignTruncateInfo
@@ -525,15 +534,13 @@ static void RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid,
 static void RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid,
 											 Oid oldrelid, void *arg);
 
-static void ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd);
-static void ATExecExpandPartitionTablePrepare(Relation rel);
-static void ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd);
+static void ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd, int numsegments);
+static void ATExecExpandPartitionTablePrepare(Relation rel, int numsegments);
+static void ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd, int numsegments);
 
 static void ATExecSetDistributedBy(Relation rel, Node *node,
 								   AlterTableCmd *cmd);
 static PartitionSpec *transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy);
-static void ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNumber *partattrs,
-								  List **partexprs, Oid *partopclass, Oid *partcollation, char strategy);
 static void CreateInheritance(Relation child_rel, Relation parent_rel);
 static void RemoveInheritance(Relation child_rel, Relation parent_rel,
 							  bool allow_detached);
@@ -630,17 +637,25 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 */
 	schema = NIL;
 	cooked_constraints = NIL;
-	foreach(listptr, stmt->tableElts)
+	if (relkind == RELKIND_DIRECTORY_TABLE)
 	{
-		Node	   *node = lfirst(listptr);
-
-		if (IsA(node, CookedConstraint))
+		schema = GetDirectoryTableSchema();
+		stmt->distributedBy = GetDirectoryTableDistributedBy();
+	}
+	else
+	{
+		foreach(listptr, stmt->tableElts)
 		{
-			Assert(Gp_role == GP_ROLE_EXECUTE);
-			cooked_constraints = lappend(cooked_constraints, node);
+			Node	   *node = lfirst(listptr);
+
+			if (IsA(node, CookedConstraint))
+			{
+				Assert(Gp_role == GP_ROLE_EXECUTE);
+				cooked_constraints = lappend(cooked_constraints, node);
+			}
+			else
+				schema = lappend(schema, node);
 		}
-		else
-			schema = lappend(schema, node);
 	}
 
 	/*
@@ -735,6 +750,12 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	}
 
 	/*
+	 * Directory table never has partitions.
+	 */
+	AssertImply(relkind == RELKIND_DIRECTORY_TABLE, !partitioned);
+	AssertImply(relkind == RELKIND_DIRECTORY_TABLE, !stmt->inhRelations);
+
+	/*
 	 * Select tablespace to use: an explicitly indicated one, or (in the case
 	 * of a partitioned table) the parent's, if it has one.
 	 */
@@ -804,7 +825,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * If the statement hasn't specified an access method, but we're defining
 	 * a type of relation that needs one, use the default.
 	 */
-	if (stmt->accessMethod != NULL)
+	if (stmt->accessMethod != NULL && relkind != RELKIND_DIRECTORY_TABLE)
 	{
 		accessMethod = stmt->accessMethod;
 
@@ -814,6 +835,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 					 errmsg("specifying a table access method is not supported on a partitioned table")));
 
 	}
+	else if (relkind == RELKIND_DIRECTORY_TABLE)
+		accessMethod = DEFAULT_TABLE_ACCESS_METHOD;
 	else if (relkind == RELKIND_RELATION ||
 			 relkind == RELKIND_TOASTVALUE ||
 			 relkind == RELKIND_MATVIEW)
@@ -825,7 +848,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		accessMethodId = get_table_am_oid(accessMethod, false);
 		amHandlerOid = get_table_am_handler_oid(accessMethod, false);
 	}
-
 
 	/*
 	 * Parse and validate reloptions, if any.
@@ -840,7 +862,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 */
 	if (AMHandlerIsAO(amHandlerOid))
 	{
-		Assert(relkind == RELKIND_MATVIEW || relkind == RELKIND_RELATION );
+		Assert(relkind == RELKIND_MATVIEW || relkind == RELKIND_RELATION || relkind == RELKIND_DIRECTORY_TABLE);
 
 		/*
 		 * Extract and process any WITH options supplied, otherwise use defaults
@@ -872,8 +894,13 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(reloptions, true);
 			break;
+		case RELKIND_RELATION:
+		case RELKIND_MATVIEW:
+		case RELKIND_TOASTVALUE:
+			(void) table_reloptions_am(accessMethodId, reloptions, relkind, true);
+			break;
 		default:
-			(void) heap_reloptions(relkind, reloptions, true);
+			break;
 	}
 
 	if (stmt->ofTypename)
@@ -924,7 +951,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 */
 	if (intoPolicy)
 	{
-		Assert(!stmt->inhRelations);
 		policy = intoPolicy;
 	}
 	else
@@ -1019,29 +1045,38 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * This is done in dispatcher (and in utility mode). In QE, we receive
 	 * the already-processed options from the QD.
 	 */
-	if ((relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW ||
-		 relkind == RELKIND_PARTITIONED_TABLE) &&
+	if ((relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW || relkind == RELKIND_DIRECTORY_TABLE) &&
 		Gp_role != GP_ROLE_EXECUTE)
 	{
-		/*
-		 * Note that we disallow encoding clauses for non-AOCO table
-		 * besides only one exception: if we're creating a partition as
-		 * part of a CREATE TABLE ... PARTITION BY ... command, ignore the
-		 * ENCODING options instead. The parent table might be AOCS, while
-		 * some of the partitions are not, or vice versa, so options can
-		 * make sense for some parts of the partition hierarchy, even if
-		 * it doesn't for this partition.
-		 */
-		stmt->attr_encodings = transformColumnEncoding(NULL /* Relation */, 
+		const TableAmRoutine *tam = GetTableAmRoutineByAmId(accessMethodId);
+
+		stmt->attr_encodings = transformColumnEncoding(tam, /* TableAmRoutine */
+								NULL /* Relation */, 
 								schema,
 								stmt->attr_encodings,
 								stmt->options,
-								relkind == RELKIND_PARTITIONED_TABLE,
-								!AMHandlerIsAoCols(amHandlerOid)
-										&& !stmt->partbound 
-										&& !stmt->partspec /* errorOnEncodingClause */);
-		if (!AMHandlerIsAoCols(amHandlerOid) && relkind != RELKIND_PARTITIONED_TABLE)
+								AMHandlerIsAoCols(amHandlerOid) /* createDefaultOne*/);
+		if (!AMHandlerSupportEncodingClause(tam) && relkind != RELKIND_PARTITIONED_TABLE)
 			stmt->attr_encodings = NIL;
+	}
+	else if (relkind == RELKIND_PARTITIONED_TABLE &&
+			 Gp_role != GP_ROLE_EXECUTE)
+	{
+		/*
+		 * The parent table might be AOCS, while some of the partitions
+		 * are not, or vice versa, so options can make sense for some
+		 * parts of the partition hierarchy, even if it doesn't for this partition.
+		 *
+		 * Also in this time, we can't get the access method from root partition.
+		 * But for other access method which support encoding clause, still can't
+		 * pass the encoding clause from root partition.
+		 */
+		stmt->attr_encodings = transfromColumnEncodingAocoRootPartition(schema,
+								stmt->attr_encodings,
+								stmt->options,
+								!AMHandlerIsAoCols(amHandlerOid)
+										&& !stmt->partbound
+										&& !stmt->partspec /* errorOnEncodingClause */);
 	}
 
 	/*
@@ -1140,6 +1175,11 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * complaining about deadlock risks.
 	 */
 	rel = relation_open(relationId, AccessExclusiveLock);
+
+	if (relkind == RELKIND_DIRECTORY_TABLE)
+	{
+		CreateDirectoryTableIndex(rel);
+	}
 
 	/*
 	 * If this is an append-only relation, create the auxliary tables necessary
@@ -1240,7 +1280,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 											   NULL, false, false);
 		addNSItemToQuery(pstate, nsitem, false, true, true);
 
-		bound = transformPartitionBound(pstate, parent, stmt->partbound);
+		bound = transformPartitionBound(pstate, parent, RelationGetPartitionKey(parent), stmt->partbound);
 
 		/*
 		 * Check first that the new partition's bound is valid and does not
@@ -1520,6 +1560,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 #define METATRACK_VALIDNAMESPACE(namespaceId) \
 	(namespaceId != PG_TOAST_NAMESPACE &&	\
 	 namespaceId != PG_BITMAPINDEX_NAMESPACE && \
+	 namespaceId != PG_EXTAUX_NAMESPACE && \
 	 namespaceId != PG_AOSEGMENT_NAMESPACE )
 
 /* check for valid namespace and valid relkind */
@@ -1633,6 +1674,8 @@ RemoveRelations(DropStmt *drop)
 	ListCell   *cell;
 	int			flags = 0;
 	LOCKMODE	lockmode = AccessExclusiveLock;
+	HeapTuple	indexTuple;
+	Form_pg_index index;
 
 	/* DROP CONCURRENTLY uses a weaker lock, and has some restrictions */
 	if (drop->concurrent)
@@ -1687,6 +1730,10 @@ RemoveRelations(DropStmt *drop)
 			relkind = RELKIND_FOREIGN_TABLE;
 			break;
 
+		case OBJECT_DIRECTORY_TABLE:
+			relkind = RELKIND_DIRECTORY_TABLE;
+			break;
+
 		default:
 			elog(ERROR, "unrecognized drop object type: %d",
 				 (int) drop->removeType);
@@ -1733,6 +1780,23 @@ RemoveRelations(DropStmt *drop)
 		{
 			DropErrorMsgNonExistent(rel, relkind, drop->missing_ok);
 			continue;
+		}
+
+		if (relkind == RELKIND_INDEX)
+		{
+			indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(relOid));
+			if (!HeapTupleIsValid(indexTuple) && !drop->missing_ok)	/* should not happen */
+				elog(ERROR, "cache lookup failed for index %u", relOid);
+			if (HeapTupleIsValid(indexTuple))
+			{
+				index = (Form_pg_index) GETSTRUCT(indexTuple);
+				if (RelationIsDirectoryTable(index->indrelid))
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("Disallowed to drop index \"%s\" on directory table \"%s\"",
+							 get_rel_name(index->indexrelid), get_rel_name(index->indrelid))));
+				ReleaseSysCache(indexTuple);
+			}
 		}
 
 		/*
@@ -2578,6 +2642,13 @@ truncate_check_rel(Oid relid, Form_pg_class reltuple)
 					 errmsg("cannot truncate foreign table \"%s\"",
 							relname)));
 	}
+	else if (reltuple->relkind == RELKIND_DIRECTORY_TABLE)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot truncate directory table \"%s\"",
+						relname)));
+	}
 	else if (reltuple->relkind != RELKIND_RELATION &&
 		reltuple->relkind != RELKIND_PARTITIONED_TABLE &&
 		(!IsBinaryUpgrade || (
@@ -2845,7 +2916,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 		 * current transaction, such as being used in some manner by an
 		 * enclosing command.
 		 */
-		if (is_partition && (Gp_role != GP_ROLE_DISPATCH))
+		/* SINGLENODE_FIXME: check and enable partition operations */
+		if (is_partition && (Gp_role != GP_ROLE_DISPATCH && !IS_SINGLENODE()))
 			CheckTableNotInUse(relation, "CREATE TABLE .. PARTITION OF or ALTER TABLE ADD PARTITION"); 
 
 		/*
@@ -3848,6 +3920,14 @@ renameatt_internal(Oid myrelid,
 	renameatt_check(myrelid, RelationGetForm(targetrelation), recursing);
 
 	/*
+	 * Don't rename IVM columns.
+	 */
+	if (RelationIsIVM(targetrelation) && isIvmName(oldattname))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("IVM column can not be renamed")));
+
+	/*
 	 * if the 'recurse' flag is set then we are supposed to rename this
 	 * attribute in all classes that inherit from 'relname' (as well as in
 	 * 'relname').
@@ -4241,6 +4321,11 @@ RenameRelation(RenameStmt *stmt)
 		 * if we already acquired AccessExclusiveLock with an index, however.
 		 */
 		relkind = get_rel_relkind(relid);
+		if (relkind == RELKIND_DIRECTORY_TABLE)
+			ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("Rename directory table is not allowed.")));
+
 		obj_is_index = (relkind == RELKIND_INDEX ||
 						relkind == RELKIND_PARTITIONED_INDEX);
 		if (obj_is_index || is_index_stmt == obj_is_index)
@@ -4887,6 +4972,7 @@ AlterTableGetLockLevel(List *cmds)
 				/* GPDB additions */
 			case AT_ExpandTable:
 			case AT_ExpandPartitionTablePrepare:
+			case AT_ShrinkTable:
 			case AT_SetDistributedBy:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
@@ -5160,7 +5246,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			pass = AT_PASS_DROP;
 			break;
 		case AT_SetStatistics:	/* ALTER COLUMN SET STATISTICS */
-			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX | ATT_FOREIGN_TABLE);
+			ATSimplePermissions(rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX | ATT_FOREIGN_TABLE | ATT_DIRECTORY_TABLE);
 			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
@@ -5193,7 +5279,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			pass = AT_PASS_DROP;
 			break;
 		case AT_AddIndex:		/* ADD INDEX */
-			ATSimplePermissions(rel, ATT_TABLE);
+			ATSimplePermissions(rel, ATT_TABLE | ATT_DIRECTORY_TABLE);
 			/* This command never recurses */
 			/* No command-specific prep needed */
 			pass = AT_PASS_ADD_INDEX;
@@ -5314,7 +5400,13 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			pass = AT_PASS_MISC;
 			break;
 		case AT_SetDistributedBy:	/* SET DISTRIBUTED BY */
-			ATSimplePermissions(rel, ATT_TABLE);
+			/* Setting distributed by is meaningless in utility mode. */
+			if (Gp_role == GP_ROLE_UTILITY)
+			{
+				pass = AT_PASS_MISC;
+				break;
+			}
+			ATSimplePermissions(rel, ATT_TABLE | ATT_DIRECTORY_TABLE);
 
 			if (!recursing) /* MPP-5772, MPP-5784 */
 			{
@@ -5451,6 +5543,37 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			pass = AT_PASS_MISC;
 			break;
 
+		case AT_ShrinkTable:
+			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE | ATT_MATVIEW);
+
+			/* ATTACH and DETACH will process in ATExecAttachPartition function */
+			if (!recursing)
+			{
+				Assert(IsA(cmd->def, Integer));
+				if (Gp_role == GP_ROLE_DISPATCH &&
+					rel->rd_cdbpolicy->numsegments <= intVal(cmd->def))
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot shrink table \"%s\"",
+									RelationGetRelationName(rel)),
+							 errdetail("table numsegments \"%d\", shrink size \"%d\" " ,rel->rd_cdbpolicy->numsegments, intVal(cmd->def))));
+
+				if (rel->rd_rel->relispartition)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot shrink leaf or interior partition \"%s\"",
+									RelationGetRelationName(rel)),
+							 errdetail("Root/leaf/interior partitions need to have same numsegments"),
+							 errhint("Call ALTER TABLE SHRINK TABLE on the root table instead")));
+				}
+
+			}
+
+			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
+			pass = AT_PASS_MISC;
+			break;
+
 		case AT_AddInherit:		/* INHERIT */
 			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE);
 			/* This command never recurses */
@@ -5490,7 +5613,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_DisableTrig:	/* DISABLE TRIGGER variants */
 		case AT_DisableTrigAll:
 		case AT_DisableTrigUser:
-			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE);
+			ATSimplePermissions(rel, ATT_TABLE | ATT_FOREIGN_TABLE | ATT_DIRECTORY_TABLE);
 			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 				ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
 			pass = AT_PASS_MISC;
@@ -5505,7 +5628,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_DisableRowSecurity:
 		case AT_ForceRowSecurity:
 		case AT_NoForceRowSecurity:
-			ATSimplePermissions(rel, ATT_TABLE);
+			ATSimplePermissions(rel, ATT_TABLE | ATT_DIRECTORY_TABLE);
 			/* These commands never recurse */
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
@@ -5954,10 +6077,13 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			ATExecSetDistributedBy(rel, (Node *) cmd->def, cmd);
 			break;
 		case AT_ExpandTable:	/* EXPAND TABLE */
-			ATExecExpandTable(wqueue, rel, cmd);
+			ATExecExpandTable(wqueue, rel, cmd, getgpsegmentCount());
 			break;
 		case AT_ExpandPartitionTablePrepare:	/* EXPAND PARTITION PREPARE */
-			ATExecExpandPartitionTablePrepare(rel);
+			ATExecExpandPartitionTablePrepare(rel, getgpsegmentCount());
+			break;
+		case AT_ShrinkTable:	/* EXPAND TABLE */
+			ATExecExpandTable(wqueue, rel, cmd, intVal(cmd->def));
 			break;
 		case AT_AttachPartition:
 			cmd = ATParseTransformCmd(wqueue, tab, rel, cmd, false, lockmode,
@@ -7118,6 +7244,8 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 			Assert(RelationIsAoCols(oldrel));
 			aoco_dml_init(newrel, CMD_INSERT);
 		}
+		else if (newrel && ext_dml_init_hook)
+			ext_dml_init_hook(newrel, CMD_INSERT);
 
 		/*
 		 * Switch to per-tuple memory context and reset it for each tuple
@@ -7370,6 +7498,9 @@ ATSimplePermissions(Relation rel, int allowed_targets)
 		case RELKIND_FOREIGN_TABLE:
 			actual_target = ATT_FOREIGN_TABLE;
 			break;
+		case RELKIND_DIRECTORY_TABLE:
+			actual_target = ATT_DIRECTORY_TABLE;
+			break;
 
 		case RELKIND_AOSEGMENTS:
 		case RELKIND_AOBLOCKDIR:
@@ -7439,7 +7570,7 @@ ATWrongRelkindError(Relation rel, int allowed_targets)
 		case ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX:
 			msg = _("\"%s\" is not a table, materialized view, index, or partitioned index");
 			break;
-		case ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX | ATT_FOREIGN_TABLE:
+		case ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX | ATT_FOREIGN_TABLE | ATT_DIRECTORY_TABLE:
 			msg = _("\"%s\" is not a table, materialized view, index, partitioned index, or foreign table");
 			break;
 		case ATT_TABLE | ATT_MATVIEW | ATT_FOREIGN_TABLE:
@@ -7462,6 +7593,15 @@ ATWrongRelkindError(Relation rel, int allowed_targets)
 			break;
 		case ATT_FOREIGN_TABLE:
 			msg = _("\"%s\" is not a foreign table");
+			break;
+		case ATT_TABLE | ATT_DIRECTORY_TABLE:
+			msg = _("\"%s\" is not a table or directory table");
+			break;
+		case ATT_TABLE | ATT_FOREIGN_TABLE | ATT_DIRECTORY_TABLE:
+			msg = _("\"%s\" is not a table, foreign table, or directory table");
+			break;
+		case ATT_DIRECTORY_TABLE:
+			msg = _("\"%s\" is not a directory table");
 			break;
 		default:
 			/* shouldn't get here, add all necessary cases above */
@@ -7865,7 +8005,6 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	ObjectAddress address;
 	TupleDesc	tupdesc;
 	FormData_pg_attribute *aattr[] = {&attribute};
- 	List* enc;
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
 	if (recursing)
@@ -8265,24 +8404,31 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	add_column_datatype_dependency(myrelid, newattnum, attribute.atttypid);
 	add_column_collation_dependency(myrelid, newattnum, attribute.attcollation);
 
-	/* 
-	 * Process the encoding clauses.
-	 *
-	 * For AO/CO tables, always store an encoding clause. If no encoding
-	 * clause was provided, store the default encoding clause.
-	 * If there's an encoding clause for non AO/CO tables, we'll throw an error 
-	 * in the function (indicated by errorOnEncodingClause == true).
-	 */
-	enc = transformColumnEncoding(rel, list_make1(colDef), 
-					NULL /* COLUMN ENCODING clauses is only for CREATE TABLE */, 
-					NULL /* withOptions */,
-					false /* rootpartition */, 
-					!RelationIsAoCols(rel) /* errorOnEncodingClause */);
-	/* 
-	 * Store the encoding clause for AO/CO tables.
-	 */
-	if (RelationIsAoCols(rel))
-		AddRelationAttributeEncodings(rel, enc);
+	if (OidIsValid(rel->rd_rel->relam))
+	{
+		List *enc;
+		const TableAmRoutine *tam = GetTableAmRoutineByAmId(rel->rd_rel->relam);
+
+		/*
+		 * Process the encoding clauses.
+		 *
+		 * For AO/CO tables, always store an encoding clause. If no encoding
+		 * clause was provided, store the default encoding clause.
+		 * If there's an encoding clause for non AO/CO tables, we'll throw an error
+		 * in the function (indicated by errorOnEncodingClause == true).
+		 *
+		 * AOCO table creates default encoding clause, others will not.
+		 */
+		enc = transformColumnEncoding(tam /* TableAmRoutine */, rel, list_make1(colDef),
+						NULL /* COLUMN ENCODING clauses is only for CREATE TABLE */,
+						NULL /* withOptions */,
+						RelationIsAoCols(rel) /* createDefaultOne */);
+		/*
+		 * Store the encoding clause for AO/CO tables.
+		 */
+		if (AMHandlerSupportEncodingClause(tam))
+			AddRelationAttributeEncodings(rel, enc);
+	}
 
 	/* MPP-6929: metadata tracking */
 	if ((Gp_role == GP_ROLE_DISPATCH) && MetaTrackValidKindNsp(rel->rd_rel))
@@ -10465,7 +10611,7 @@ ATAddCheckConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 * constraint creation only if there are no children currently.  Error out
 	 * otherwise.
 	 */
-	if (Gp_role == GP_ROLE_DISPATCH && children && !recurse)
+	if ((Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_UTILITY) && children && !recurse)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("constraint must be added to child tables too")));
@@ -10744,7 +10890,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		 * strategy number is equality.  (Is it reasonable to insist that
 		 * every such index AM use btree's number for equality?)
 		 */
-		if (amid != BTREE_AM_OID)
+		if (!IsIndexAccessMethod(amid, BTREE_AM_OID))
 			elog(ERROR, "only b-tree indexes are supported for foreign keys");
 		eqstrategy = BTEqualStrategyNumber;
 
@@ -14000,6 +14146,10 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_TRANSFORM:
 			case OCLASS_EXTPROTOCOL:
 			case OCLASS_TASK:
+			case OCLASS_PROFILE:
+			case OCLASS_PASSWORDHISTORY:
+			case OCLASS_STORAGE_SERVER:
+			case OCLASS_STORAGE_USER_MAPPING:
 
 				/*
 				 * We don't expect any of these sorts of objects to depend on
@@ -14009,10 +14159,18 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 					 getObjectDescription(&foundObject, false));
 				break;
 
+			default:
+			{
+				struct CustomObjectClass *coc;
+				coc = find_custom_object_class_by_classid(foundObject.classId, false);
+				if (coc->alter_column_type)
+					coc->alter_column_type(coc);
 				/*
 				 * There's intentionally no default: case here; we want the
 				 * compiler to warn if a new OCLASS hasn't been handled above.
 				 */
+				break;
+			}
 		}
 	}
 
@@ -14595,9 +14753,68 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 	 * If ATController() is called by internal utility command, not driven
 	 * by QD, we still need to add items to the work queue.
 	 * See details at ATController
+	 *
+	 * However, we need to check if we are to reuse the relfilenode of an
+	 * existing index. This information is unique to QD and each QE. If so,
+	 * we need to replace that with QE's own relfilenode. Note that this is
+	 * not a problem for foreign key operator oids (see TryReuseForeignKey)
+	 * since those are the same among QD/QEs.
 	 */
 	if (Gp_role == GP_ROLE_EXECUTE && context != NULL)
+	{
+		ListCell 		*lc;
+		Relation 		rel;
+		Relation 		irel = NULL;
+		AlteredTableInfo 	*tab;
+
+		/* Caller should already have acquired whatever lock we need. */
+		rel = relation_open(oldRelId, NoLock);
+		tab = ATGetQueueEntry(wqueue, rel);
+
+		/* Check the commands I got from QD for any re-used index. */
+		foreach (lc, tab->subcmds[AT_PASS_OLD_INDEX])
+		{
+			AlterTableCmd 	*cmd = castNode(AlterTableCmd, lfirst(lc));
+			IndexStmt 	*stmt;
+
+			Assert(cmd->subtype == AT_ReAddIndex);
+
+			stmt = (IndexStmt *) cmd->def;
+
+			/* if we are not reusing this index, continue */
+			if (!OidIsValid(stmt->oldNode))
+				continue;
+
+			if (irel == NULL)
+			{
+				Oid 		indoid = InvalidOid;
+				HeapTuple 	tup;
+
+				tup = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(oldId));
+				if (HeapTupleIsValid(tup))
+					indoid = oldId;
+				else
+					/* not an index, them it must be a constraint */
+					indoid = get_constraint_index(oldId);
+
+				if (HeapTupleIsValid(tup))
+					ReleaseSysCache(tup);
+
+				Assert(OidIsValid(indoid));
+
+				/* We might not open index on QE, so acquire a valid lock */
+				irel = index_open(indoid, AccessShareLock);
+			}
+
+			/* replace it with my own */
+			stmt->oldNode = irel->rd_node.relNode;
+		}
+
+		if (irel != NULL)
+			index_close(irel, AccessShareLock);
+		relation_close(rel, NoLock);
 		return;
+	}
 
 	/*
 	 * We expect that we will get only ALTER TABLE and CREATE INDEX
@@ -15072,6 +15289,7 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 		case RELKIND_MATVIEW:
 		case RELKIND_FOREIGN_TABLE:
 		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_DIRECTORY_TABLE:
 			/* ok to change owner */
 			break;
 		case RELKIND_INDEX:
@@ -15247,6 +15465,8 @@ ATExecChangeOwner(Oid relationOid, Oid newOwnerId, bool recursing, LOCKMODE lock
 			tuple_class->relkind == RELKIND_PARTITIONED_TABLE ||
 			tuple_class->relkind == RELKIND_MATVIEW ||
 			tuple_class->relkind == RELKIND_TOASTVALUE ||
+			tuple_class->relkind == RELKIND_DIRECTORY_TABLE ||
+			tuple_class->relnamespace == PG_EXTAUX_NAMESPACE ||
 			IsAppendonlyMetadataRelkind(tuple_class->relkind))
 		{
 			List	   *index_oid_list;
@@ -15663,10 +15883,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		case RELKIND_AOSEGMENTS:
 		case RELKIND_AOBLOCKDIR:
 		case RELKIND_AOVISIMAP:
-			if (RelationIsAppendOptimized(rel))
-				(void) default_reloptions(newOptions, true, RELOPT_KIND_APPENDOPTIMIZED);
-			else
-				(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			(void) table_reloptions(rel->rd_tableam->amoptions, newOptions, rel->rd_rel->relkind, true);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);
@@ -15778,7 +15995,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 										 defList, "toast", validnsps, false,
 										 operation == AT_ResetRelOptions);
 
-		(void) heap_reloptions(RELKIND_TOASTVALUE, newOptions, true);
+		(void) table_reloptions(toastrel->rd_tableam->amoptions, newOptions, RELKIND_TOASTVALUE, true);
 
 		memset(repl_val, 0, sizeof(repl_val));
 		memset(repl_null, false, sizeof(repl_null));
@@ -17423,8 +17640,11 @@ build_ctas_with_dist(Relation rel, DistributedBy *dist_clause,
 	return queryDesc;
 }
 
+/*
+ * GPDB: Convenience function to get reloptions for a given relation.
+ */
 static Datum
-new_rel_opts(Relation rel)
+get_rel_opts(Relation rel)
 {
 	Datum newOptions = PointerGetDatum(NULL);
 
@@ -17796,9 +18016,13 @@ checkPolicyCompatibleWithIndexes(Relation rel, GpPolicy *pol)
  *    the data to the new reltion file, and swap it in place of the old one.
  *    This is called the "CTAS method", because it uses a CREATE TABLE AS
  *    command internally to create the new physical relation.
+ * 
+ * To support shrink, We add parameter numsegments to set table policy to 
+ * arbitrary size. For expand, the numsegments is getgpsegmentCount. For shrink
+ * the numsegments is input of user.
  */
 static void
-ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd)
+ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd, int numsegments)
 {
 	AlteredTableInfo	*tab;
 	AlterTableCmd		*rootCmd;
@@ -17860,11 +18084,11 @@ ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd)
 	}
 	else
 	{
-		ATExecExpandTableCTAS(rootCmd, rel, cmd);
+		ATExecExpandTableCTAS(rootCmd, rel, cmd, numsegments);
 	}
 
 	/* Update numsegments to cluster size */
-	newPolicy->numsegments = getgpsegmentCount();
+	newPolicy->numsegments = numsegments;
 	GpPolicyReplace(relid, newPolicy);
 }
 
@@ -17889,11 +18113,12 @@ ATExecExpandTable(List **wqueue, Relation rel, AlterTableCmd *cmd)
  *    and new policy type of leaf partitions are randomly on 3 segments
  *
  * @param rel the parent or leaf of partition table
+ * 
+ * Add parameter numsegments, see ATExecExpandTable for details.
  */
 static void
-ATExecExpandPartitionTablePrepare(Relation rel)
+ATExecExpandPartitionTablePrepare(Relation rel, int numsegments)
 {
-	int       new_numsegments = getgpsegmentCount();
 	Oid       relid = RelationGetRelid(rel);
 
 	if (GpPolicyIsRandomPartitioned(rel->rd_cdbpolicy) || rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -17908,7 +18133,7 @@ ATExecExpandPartitionTablePrepare(Relation rel)
 		 */
 		oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(rel));
 		new_policy = GpPolicyCopy(rel->rd_cdbpolicy);
-		new_policy->numsegments = new_numsegments;
+		new_policy->numsegments = numsegments;
 		MemoryContextSwitchTo(oldcontext);
 
 		GpPolicyReplace(relid, new_policy);
@@ -17934,7 +18159,7 @@ ATExecExpandPartitionTablePrepare(Relation rel)
 					/* Just modify the numsegments for external writable leaves */
 					oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(rel));
 					new_policy = GpPolicyCopy(rel->rd_cdbpolicy);
-					new_policy->numsegments = new_numsegments;
+					new_policy->numsegments = numsegments;
 					MemoryContextSwitchTo(oldcontext);
 
 					GpPolicyReplace(relid, new_policy);
@@ -17950,7 +18175,7 @@ ATExecExpandPartitionTablePrepare(Relation rel)
 
 			/* we change policy type to randomly for regular leaf partitions distributed by hash */
 			oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(rel));
-			new_policy = createRandomPartitionedPolicy(new_numsegments);
+			new_policy = createRandomPartitionedPolicy(numsegments);
 			MemoryContextSwitchTo(oldcontext);
 
 			GpPolicyReplace(relid, new_policy);
@@ -17961,10 +18186,9 @@ ATExecExpandPartitionTablePrepare(Relation rel)
 }
 
 static void
-ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd)
+ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd, int numsegments)
 {
 	RangeVar			*tmprv;
-	Datum				newOptions;
 	Oid					tmprelid;
 	Oid					relid = RelationGetRelid(rel);
 	ReindexParams		params = {0};
@@ -18002,12 +18226,10 @@ ATExecExpandTableCTAS(AlterTableCmd *rootCmd, Relation rel, AlterTableCmd *cmd)
 
 		/* Step (b) - build CTAS */
 		distby = make_distributedby_for_rel(rel);
-		distby->numsegments = getgpsegmentCount();
-
-		newOptions = new_rel_opts(rel);
+		distby->numsegments = numsegments;
 
 		queryDesc = build_ctas_with_dist(rel, distby,
-						untransformRelOptions(newOptions),
+						untransformRelOptions(get_rel_opts(rel)),
 						&tmprv,
 						true);
 
@@ -18137,7 +18359,6 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 	bool        rand_pol = false;
 	bool        rep_pol = false;
 	bool        force_reorg = false;
-	Datum		newOptions = PointerGetDatum(NULL);
 	bool		need_reorg;
 	bool		change_policy = false;
 	int			numsegments;
@@ -18238,8 +18459,6 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 			lwith = nlist;
 		}
 
-		newOptions = new_rel_opts(rel);
-
 		if (ldistro)
 			change_policy = true;
 
@@ -18282,8 +18501,8 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 
 				cmd->policy = policy;
 
-				/* only need to rebuild if have new storage options */
-				if (!(DatumGetPointer(newOptions) || force_reorg))
+				/* no need to rebuild if REORGANIZE=false*/
+				if (!force_reorg)
 					goto l_distro_fini;
 			}
 		}
@@ -18302,12 +18521,9 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 
 			policy = createReplicatedGpPolicy(ldistro->numsegments);
 
-			/* rebuild if have new storage options or policy changed */
-			if (!DatumGetPointer(newOptions) &&
-				GpPolicyIsReplicated(rel->rd_cdbpolicy))
-			{
+			/* rebuild only if policy changed */
+			if (GpPolicyIsReplicated(rel->rd_cdbpolicy))
 				goto l_distro_fini;
-			}
 
 			/*
 			 * system columns is not visiable to users for replicated table,
@@ -18410,11 +18626,9 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 													 ldistro->numsegments);
 
 				/*
-				 * See if the old policy is the same as the new one but
-				 * remember, we still might have to rebuild if there are new
-				 * storage options.
+				 * See if the old policy is the same as the new one.
 				 */
-				if (!DatumGetPointer(newOptions) && !force_reorg &&
+				if (!force_reorg &&
 					(policy->nattrs == rel->rd_cdbpolicy->nattrs))
 				{
 					int i;
@@ -18472,6 +18686,7 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 			ldistro = make_distributedby_for_rel(rel);
 
 		if (rel->rd_rel->relkind == RELKIND_RELATION ||
+			rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE ||
 			rel->rd_rel->relkind == RELKIND_MATVIEW)
 		{
 			need_reorg = true;
@@ -18540,7 +18755,7 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 
 			/* Step (b) - build CTAS */
 			queryDesc = build_ctas_with_dist(rel, ldistro,
-											 untransformRelOptions(newOptions),
+											 untransformRelOptions(get_rel_opts(rel)),
 											 &tmprv,
 											 true);
 
@@ -18632,7 +18847,6 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 		backend_id = cmd->backendId - 1;
 		tmprv = make_temp_table_name(rel, backend_id);
 
-		newOptions = new_rel_opts(rel);
 		need_reorg = true;
 	}
 
@@ -18673,58 +18887,8 @@ ATExecSetDistributedBy(Relation rel, Node *node, AlterTableCmd *cmd)
 							ReadNextMultiXactId(),
 							NULL);
 
-		/*
-		 * Make changes from swapping relation files visible before updating
-		 * options below or else we get an already updated tuple error.
-		 */
+		/* Make changes from swapping relation files visible. */
 		CommandCounterIncrement();
-
-		if (DatumGetPointer(newOptions))
-		{
-			Datum		repl_val[Natts_pg_class];
-			bool		repl_null[Natts_pg_class];
-			bool		repl_repl[Natts_pg_class];
-			HeapTuple	newOptsTuple;
-			HeapTuple	tuple;
-			Relation	relationRelation;
-
-			/*
-			 * All we need do here is update the pg_class row; the new
-			 * options will be propagated into relcaches during
-			 * post-commit cache inval.
-			 */
-			MemSet(repl_val, 0, sizeof(repl_val));
-			MemSet(repl_null, false, sizeof(repl_null));
-			MemSet(repl_repl, false, sizeof(repl_repl));
-
-			if (newOptions != (Datum) 0)
-				repl_val[Anum_pg_class_reloptions - 1] = newOptions;
-			else
-				repl_null[Anum_pg_class_reloptions - 1] = true;
-
-			repl_repl[Anum_pg_class_reloptions - 1] = true;
-
-			relationRelation = table_open(RelationRelationId, RowExclusiveLock);
-			tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(tarrelid));
-
-			Assert(HeapTupleIsValid(tuple));
-			newOptsTuple = heap_modify_tuple(tuple, RelationGetDescr(relationRelation),
-											 repl_val, repl_null, repl_repl);
-
-			CatalogTupleUpdate(relationRelation, &tuple->t_self, newOptsTuple);
-
-			heap_freetuple(newOptsTuple);
-
-			ReleaseSysCache(tuple);
-
-			table_close(relationRelation, RowExclusiveLock);
-
-			/*
-			 * Increment cmd counter to make updates visible; this is
-			 * needed because the same tuple has to be updated again
-			 */
-			CommandCounterIncrement();
-		}
 
 		/* now, reindex */
 		reindex_relation(tarrelid, 0, &params);
@@ -18773,6 +18937,12 @@ make_distributedby_for_rel(Relation rel)
 	DistributedBy *dist;
 
 	dist = makeNode(DistributedBy);
+
+	if (Gp_role == GP_ROLE_UTILITY)
+	{
+		Assert(policy->ptype == POLICYTYPE_ENTRY);
+		return NULL;
+	}
 
 	Assert(policy->ptype != POLICYTYPE_ENTRY);
 
@@ -19660,6 +19830,7 @@ AlterTableNamespaceInternal(Relation rel, Oid oldNspOid, Oid nspOid,
 
 	/* Fix other dependent stuff */
 	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE ||
 		rel->rd_rel->relkind == RELKIND_MATVIEW ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
@@ -20134,10 +20305,11 @@ RangeVarCallbackOwnsTable(const RangeVar *relation,
 	if (!relkind)
 		return;
 	if (relkind != RELKIND_RELATION && relkind != RELKIND_TOASTVALUE &&
-		relkind != RELKIND_MATVIEW && relkind != RELKIND_PARTITIONED_TABLE)
+		relkind != RELKIND_MATVIEW && relkind != RELKIND_PARTITIONED_TABLE &&
+		relkind != RELKIND_DIRECTORY_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table or materialized view", relation->relname)));
+				 errmsg("\"%s\" is not a table, directory table or materialized view", relation->relname)));
 
 	/* Check permissions */
 	if (!pg_class_ownercheck(relId, GetUserId()))
@@ -20289,6 +20461,11 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("\"%s\" is not a composite type", rv->relname)));
 
+	if (reltype == OBJECT_DIRECTORY_TABLE && relkind != RELKIND_DIRECTORY_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not a directory table", rv->relname)));
+
 	if (reltype == OBJECT_INDEX && relkind != RELKIND_INDEX &&
 		relkind != RELKIND_PARTITIONED_INDEX
 		&& !IsA(stmt, RenameStmt))
@@ -20312,6 +20489,7 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 	 */
 	if (IsA(stmt, AlterObjectSchemaStmt) &&
 		relkind != RELKIND_RELATION &&
+		relkind != RELKIND_DIRECTORY_TABLE &&
 		relkind != RELKIND_VIEW &&
 		relkind != RELKIND_MATVIEW &&
 		relkind != RELKIND_SEQUENCE &&
@@ -20319,7 +20497,7 @@ RangeVarCallbackForAlterRelation(const RangeVar *rv, Oid relid, Oid oldrelid,
 		relkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("\"%s\" is not a table, view, materialized view, sequence, or foreign table",
+				 errmsg("\"%s\" is not a table, directory table, view, materialized view, sequence, or foreign table",
 						rv->relname)));
 
 	ReleaseSysCache(tuple);
@@ -20411,7 +20589,7 @@ transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
  * Compute per-partition-column information from a list of PartitionElems.
  * Expressions in the PartitionElems must be parse-analyzed already.
  */
-static void
+void
 ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNumber *partattrs,
 					  List **partexprs, Oid *partopclass, Oid *partcollation,
 					  char strategy)

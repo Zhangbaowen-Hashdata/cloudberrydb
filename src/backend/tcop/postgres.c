@@ -110,6 +110,7 @@
 #include "utils/session_state.h"
 #include "utils/vmem_tracker.h"
 #include "tcop/idle_resource_cleaner.h"
+#include "commands/matview.h"
 
 /* ----------------
  *		global variables
@@ -147,6 +148,11 @@ int			client_connection_check_interval = 0;
  * the hook function can check those to determine what event happened.
  */
 cancel_pending_hook_type cancel_pending_hook = NULL;
+
+/*
+ * Hook for query execution.
+ */
+exec_simple_query_hook_type exec_simple_query_hook = NULL;
 
 /* ----------------
  *		private typedefs etc
@@ -1276,6 +1282,10 @@ exec_mpp_query(const char *query_string,
 	else
 		paramLI = NULL;
 
+	if (ddesc && ddesc->snaplen > 0)
+	{
+		AddPreassignedMVEntry(ddesc->matviewOid, ddesc->tableid, ddesc->snapname);
+	}
 	/*
 	 * Switch back to transaction context to enter the loop.
 	 */
@@ -1642,7 +1652,7 @@ restore_guc_to_QE(void )
  *
  * Execute a "simple Query" protocol message.
  */
-static void
+void
 exec_simple_query(const char *query_string)
 {
 	CommandDest dest = whereToSendOutput;
@@ -5350,10 +5360,10 @@ PostgresMain(int argc, char *argv[],
 
 		initStringInfo(&input_message);
 
-        /* Reset elog globals */
-        currentSliceId = UNSET_SLICE_ID;
-        if (Gp_role == GP_ROLE_EXECUTE)
-            gp_command_count = 0;
+		/* Reset elog globals */
+		currentSliceId = UNSET_SLICE_ID;
+		if (Gp_role == GP_ROLE_EXECUTE)
+			gp_command_count = 0;
 
 		/*
 		 * Do deactiving and runaway detecting before ReadyForQuery(),
@@ -5564,12 +5574,19 @@ PostgresMain(int argc, char *argv[],
 					if (am_walsender)
 					{
 						if (!exec_replication_command(query_string))
-							exec_simple_query(query_string);
+						{
+							if (exec_simple_query_hook)
+								exec_simple_query_hook(query_string);
+							else
+								exec_simple_query(query_string);
+						}
 					}
 					else if (am_ftshandler)
 						HandleFtsMessage(query_string);
 					else if (am_faulthandler)
 						HandleFaultMessage(query_string);
+					else if (exec_simple_query_hook)
+						exec_simple_query_hook(query_string);
 					else
 						exec_simple_query(query_string);
 
@@ -5730,7 +5747,10 @@ PostgresMain(int argc, char *argv[],
 						}
 						else
 						{
-							exec_simple_query(query_string);
+							if (exec_simple_query_hook)
+								exec_simple_query_hook(query_string);
+							else
+								exec_simple_query(query_string);
 						}
 					}
 					else

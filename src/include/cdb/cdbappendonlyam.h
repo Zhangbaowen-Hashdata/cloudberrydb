@@ -112,10 +112,6 @@ typedef struct AppendOnlyInsertDescData
 	/* The block directory for the appendonly relation. */
 	AppendOnlyBlockDirectory blockDirectory;
 
-	/*
-	 * For multiple segment files insertion.
-	 */
-	bool			insertMultiFiles; /* insert into multi files */
 	dlist_node		node;	/* node of segfiles list */
 	int 			range;  /* inserted tuples of each range */
 	/* flag for insert placeholder in unique index   */
@@ -406,7 +402,10 @@ typedef struct AppendOnlyDeleteDescData *AppendOnlyDeleteDesc;
 typedef struct AppendOnlyUniqueCheckDescData
 {
 	AppendOnlyBlockDirectory *blockDirectory;
+	/* visimap to check for deleted tuples as part of INSERT/COPY */
 	AppendOnlyVisimap 		 *visimap;
+	/* visimap support structure to check for deleted tuples as part of UPDATE */
+	AppendOnlyVisimapDelete  *visiMapDelete;
 } AppendOnlyUniqueCheckDescData;
 
 typedef struct AppendOnlyUniqueCheckDescData *AppendOnlyUniqueCheckDesc;
@@ -436,6 +435,12 @@ extern TableScanDesc appendonly_beginscan(Relation relation,
 										  int nkeys, struct ScanKeyData *key,
 										  ParallelTableScanDesc pscan,
 										  uint32 flags);
+extern TableScanDesc appendonly_beginscan_extractcolumns(Relation rel,
+														 Snapshot snapshot,
+														 int nkeys, struct ScanKeyData *key,
+														 ParallelTableScanDesc parallel_scan,
+														 PlanState *ps,
+														 uint32 flags);
 extern void appendonly_rescan(TableScanDesc scan, ScanKey key,
 								bool set_params, bool allow_strat,
 								bool allow_sync, bool allow_pagemode);
@@ -443,6 +448,7 @@ extern void appendonly_endscan(TableScanDesc scan);
 extern bool appendonly_getnextslot(TableScanDesc scan,
 								   ScanDirection direction,
 								   TupleTableSlot *slot);
+extern uint32 appendonly_scan_flags(Relation relation);
 extern AppendOnlyFetchDesc appendonly_fetch_init(
 	Relation 	relation,
 	Snapshot    snapshot,

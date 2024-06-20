@@ -57,6 +57,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_foreign_server.h"
 #include "catalog/pg_trigger.h"
+#include "catalog/pg_directory_table.h"
 #include "commands/defrem.h"
 #include "commands/trigger.h"
 #include "nodes/makefuncs.h"
@@ -67,6 +68,7 @@
 #include "utils/date.h"
 #include "utils/datetime.h"
 #include "utils/numeric.h"
+#include "utils/varlena.h"
 #include "utils/xml.h"
 #include "cdb/cdbutil.h"
 #include "cdb/cdbvars.h"
@@ -281,17 +283,18 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 		AlterDatabaseStmt AlterDatabaseSetStmt AlterDomainStmt AlterEnumStmt
 		AlterFdwStmt AlterForeignServerStmt AlterGroupStmt
 		AlterObjectDependsStmt AlterObjectSchemaStmt AlterOwnerStmt
-		AlterOperatorStmt AlterTypeStmt AlterSeqStmt AlterSystemStmt AlterTableStmt
+		AlterOperatorStmt AlterTypeStmt AlterSeqStmt AlterStorageServerStmt AlterSystemStmt AlterTableStmt
 		AlterTblSpcStmt AlterExtensionStmt AlterExtensionContentsStmt
-		AlterCompositeTypeStmt AlterUserMappingStmt
+		AlterCompositeTypeStmt AlterUserMappingStmt AlterStorageUserMappingStmt
 		AlterRoleStmt AlterRoleSetStmt AlterPolicyStmt AlterStatsStmt
 		AlterDefaultPrivilegesStmt DefACLAction
 		AnalyzeStmt CallStmt ClosePortalStmt ClusterStmt CommentStmt
 		ConstraintsSetStmt CopyStmt CreateAsStmt CreateCastStmt
 		CreateDomainStmt CreateExtensionStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
-		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt
+		CreateStorageServerStmt CreateStorageUserMappingStmt
+		CreateTableSpaceStmt CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt CreateDirectoryTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt CreateWarehouseStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
@@ -299,7 +302,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 		DropCastStmt DropRoleStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
-		DropUserMappingStmt ExplainStmt FetchStmt
+		DropUserMappingStmt DropStorageServerStmt DropStorageUserMappingStmt ExplainStmt FetchStmt
 		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
 		ListenStmt LoadStmt LockStmt NotifyStmt ExplainableStmt PreparableStmt
 		CreateFunctionStmt AlterFunctionStmt ReindexStmt RemoveAggrStmt
@@ -318,10 +321,10 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 		RetrieveStmt CreateTaskStmt AlterTaskStmt DropTaskStmt
 
 /* GPDB-specific commands */
-%type <node>	AlterQueueStmt AlterResourceGroupStmt
+%type <node>	AlterProfileStmt AlterQueueStmt AlterResourceGroupStmt
 		CreateExternalStmt
-		CreateQueueStmt CreateResourceGroupStmt
-		DropQueueStmt DropResourceGroupStmt
+		CreateProfileStmt CreateQueueStmt CreateResourceGroupStmt
+		DropProfileStmt DropQueueStmt DropResourceGroupStmt
 		ExtTypedesc OptSingleRowErrorHandling ExtSingleRowErrorHandling
 
 %type <node>    deny_login_role deny_interval deny_point deny_day_specifier
@@ -373,8 +376,10 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 %type <ival>	opt_nowait_or_skip
 
 %type <list>	OptRoleList AlterOptRoleList
+%type <list>    OptProfileList
 %type <defelt>	CreateOptRoleElem AlterOptRoleElem
 %type <defelt>	AlterOnlyOptRoleElem
+%type <defelt>  OptProfileElem
 
 %type <str>		opt_type
 %type <str>		foreign_server_version opt_foreign_server_version
@@ -407,7 +412,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 %type <str>		copy_file_name
 				access_method_clause attr_name
 				table_access_method_clause name cursor_name file_name
-				opt_index_name cluster_index_specification
+				opt_index_name cluster_index_specification opt_file_name
 
 %type <list>	func_name handler_name qual_Op qual_all_Op subquery_Op
 				opt_class opt_inline_handler opt_validator validator_clause
@@ -489,6 +494,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 %type <range>	OptTempTableName
 %type <into>	into_clause create_as_target create_mv_target
+%type <boolean>	incremental
 
 %type <defelt>	createfunc_opt_item common_func_opt_item dostmt_opt_item
 %type <fun_param> func_arg func_arg_with_default table_func_column aggr_arg
@@ -637,6 +643,9 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 %type <list>	constraints_set_list
 %type <boolean> constraints_set_mode
 %type <str>		OptTableSpace OptConsTableSpace
+%type <defelt>  OptServer
+%type <str>     OptFileHandler
+
 %type <rolespec> OptTableSpaceOwner
 %type <node>    DistributedBy OptDistributedBy 
 %type <ival>	OptTabPartitionRangeInclusive
@@ -752,7 +761,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 	DATA_P DATABASE DAY_P DEALLOCATE DEC DECIMAL_P DECLARE DEFAULT DEFAULTS
 	DEFERRABLE DEFERRED DEFINER DELETE_P DELIMITER DELIMITERS DEPENDS DEPTH DESC
-	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
+	DETACH DICTIONARY DIRECTORY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
 	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENDPOINT ENUM_P ESCAPE EVENT EXCEPT
@@ -767,7 +776,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
 	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
-	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
+	INCLUDING INCREMENT INCREMENTAL INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
 
@@ -831,7 +840,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 /* GPDB-added keywords, in alphabetical order */
 %token <keyword>
-	ACTIVE
+	ACCOUNT ACTIVE
 
 	CONTAINS COORDINATOR CPUSET CPU_RATE_LIMIT
 
@@ -841,7 +850,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 	ERRORS EVERY EXCHANGE EXPAND
 
-	FIELDS FILL FORMAT
+	FAILED_LOGIN_ATTEMPTS FIELDS FILL FORMAT
 
 	FULLSCAN
 
@@ -859,18 +868,22 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 
 	ORDERED OVERCOMMIT
 
-	PARTITIONS PERCENT PERSISTENTLY PROTOCOL
+	PARTITIONS PASSWORD_LOCK_TIME PASSWORD_REUSE_MAX PERCENT PERSISTENTLY PROFILE PROTOCOL
 
 	QUEUE
 
 	RANDOMLY READABLE READS REJECT_P REPLICATED RESOURCE
 	ROOTPARTITION
 
-	SCATTER SEGMENT SEGMENTS SPLIT SUBPARTITION
+	SCATTER SEGMENT SEGMENTS SHRINK SPLIT SUBPARTITION
+
+	TAG
 
 	TASK SCHEDULE
 
 	THRESHOLD
+
+	UNLOCK_P
 
 	VALIDATION
 
@@ -1191,6 +1204,7 @@ static void check_expressions_in_partition_key(PartitionSpec *spec, core_yyscan_
 			%nonassoc UNCOMMITTED
 			%nonassoc UNENCRYPTED
 			%nonassoc UNLISTEN
+			%nonassoc UNLOCK_P
 			%nonassoc UNTIL
 			%nonassoc UPDATE
 			%nonassoc VACUUM
@@ -1386,9 +1400,11 @@ stmt:
 			| AlterTaskStmt
 			| AlterTypeStmt
 			| AlterPolicyStmt
+			| AlterProfileStmt
 			| AlterQueueStmt
 			| AlterResourceGroupStmt
 			| AlterSeqStmt
+			| AlterStorageServerStmt
 			| AlterSystemStmt
 			| AlterTableStmt
 			| AlterTblSpcStmt
@@ -1401,6 +1417,7 @@ stmt:
 			| AlterTSConfigurationStmt
 			| AlterTSDictionaryStmt
 			| AlterUserMappingStmt
+			| AlterStorageUserMappingStmt
 			| AnalyzeStmt
 			| CallStmt
 			| CheckPointStmt
@@ -1415,6 +1432,7 @@ stmt:
 			| CreateCastStmt
 			| CreateConversionStmt
 			| CreateDomainStmt
+			| CreateDirectoryTableStmt
 			| CreateExtensionStmt
 			| CreateExternalStmt
 			| CreateFdwStmt
@@ -1429,6 +1447,7 @@ stmt:
 			| CreateWarehouseStmt
 			| AlterOpFamilyStmt
 			| CreatePolicyStmt
+			| CreateProfileStmt
 			| CreatePLangStmt
 			| CreateQueueStmt
 			| CreateResourceGroupStmt
@@ -1437,6 +1456,8 @@ stmt:
 			| CreateStmt
 			| CreateSubscriptionStmt
 			| CreateStatsStmt
+			| CreateStorageServerStmt
+			| CreateStorageUserMappingStmt
 			| CreateTableSpaceStmt
 			| CreateTaskStmt
 			| CreateTransformStmt
@@ -1456,6 +1477,7 @@ stmt:
 			| DropOpClassStmt
 			| DropOpFamilyStmt
 			| DropOwnedStmt
+			| DropProfileStmt
 			| DropQueueStmt
 			| DropResourceGroupStmt
 			| DropStmt
@@ -1466,6 +1488,8 @@ stmt:
 			| DropRoleStmt
 			| DropUserMappingStmt
 			| DropdbStmt
+			| DropStorageServerStmt
+			| DropStorageUserMappingStmt
 			| DropWarehouseStmt
 			| ExecuteStmt
 			| ExplainStmt
@@ -1853,6 +1877,26 @@ AlterOptRoleElem:
 				{
 					$$ = makeDefElem("deny", (Node *) $1, @1);
 				}
+			| PROFILE name
+			    {
+			        $$ = makeDefElem("profile", (Node *)makeString($2), @1);
+			    }
+			| ACCOUNT LOCK_P
+			    {
+			        $$ = makeDefElem("accountislock", (Node *) makeInteger(true), @1);
+			    }
+			| ACCOUNT UNLOCK_P
+			    {
+			        $$ = makeDefElem("accountislock", (Node*) makeInteger(false), @1);
+			    }
+			| ENABLE_P PROFILE
+                	    {
+                    		$$ = makeDefElem("enableProfile", (Node *) makeInteger(true), @1);
+                	    }
+			| DISABLE_P PROFILE
+                	    {
+                    		$$ = makeDefElem("enableProfile", (Node *) makeInteger(false), @1);
+                	    }
 			| IDENT
 				{
 					/*
@@ -2110,6 +2154,99 @@ DropRoleStmt:
 					$$ = (Node *)n;
 				}
 			;
+
+
+/*****************************************************************************
+ *
+ * Create a new Postgres DBMS Profile
+ *
+ *****************************************************************************/
+
+CreateProfileStmt:
+            CREATE PROFILE name
+                {
+                    CreateProfileStmt *n = makeNode(CreateProfileStmt);
+                    n->profile_name = $3;
+                    $$ = (Node *)n;
+                }
+		| CREATE PROFILE name LIMIT OptProfileList
+		{
+			CreateProfileStmt *n = makeNode(CreateProfileStmt);
+			n->profile_name = $3;
+			n->options = $5;
+			$$ = (Node *)n;
+		}
+		;
+
+/*
+ * Options for CREATE PROFILE and ALTER PROFILE.
+ */
+OptProfileList:
+            OptProfileList OptProfileElem           { $$ = lappend($1, $2); }
+            | /* EMPTY */                           { $$ = NIL; }
+        ;
+
+OptProfileElem:
+            FAILED_LOGIN_ATTEMPTS SignedIconst
+                {
+                    $$ = makeDefElem("failed_login_attempts",
+                                     (Node *)makeInteger($2), @1);
+                }
+            | PASSWORD_LOCK_TIME SignedIconst
+                {
+                    $$ = makeDefElem("password_lock_time",
+                                     (Node *)makeInteger($2), @1);
+                }
+            | PASSWORD_REUSE_MAX SignedIconst
+                {
+                    $$ = makeDefElem("password_reuse_max",
+                                     (Node *)makeInteger($2), @1);
+                }
+        ;
+
+
+/*****************************************************************************
+ *
+ * Alter a postgresql DBMS profile
+ *
+ *****************************************************************************/
+
+AlterProfileStmt:
+            ALTER PROFILE name LIMIT OptProfileList
+                {
+                    AlterProfileStmt *n = makeNode(AlterProfileStmt);
+                    n->profile_name = $3;
+                    n->options = $5;
+                    $$ = (Node *)n;
+                }
+        ;
+
+
+/*****************************************************************************
+ *
+ * Drop a postgresql DBMS profile
+ *
+ * XXX Ideally this would have CASCADE/RESTRICT options, but a profile
+ * might be attached by users in multiple databases, using CASCADE will drop
+ * users meanwhile which is unreasonable.  So we always behave as RESTRICT.
+ *****************************************************************************/
+
+DropProfileStmt:
+            DROP PROFILE name_list
+                {
+                    DropProfileStmt *n = makeNode(DropProfileStmt);
+                    n->profiles = $3;
+                    n->missing_ok = false;
+                    $$ = (Node *)n;
+                }
+            | DROP PROFILE IF_P EXISTS name_list
+                {
+                    DropProfileStmt *n = makeNode(DropProfileStmt);
+                    n->profiles = $5;
+                    n->missing_ok = true;
+                    $$ = (Node *)n;
+                }
+        ;
 
 
 /*****************************************************************************
@@ -3425,6 +3562,14 @@ alter_table_cmd:
 					n->subtype = AT_ExpandPartitionTablePrepare;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> SHRINK TABLE TO <segmentnum>*/
+			| SHRINK TABLE TO SignedIconst
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_ShrinkTable;
+					n->def = (Node *) makeInteger($4);
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> OF <type_name> */
 			| OF any_name
 				{
@@ -4365,7 +4510,7 @@ ClosePortalStmt:
  *****************************************************************************/
 
 CopyStmt:	COPY opt_binary qualified_name opt_column_list
-			copy_from opt_program copy_file_name copy_delimiter opt_with
+			copy_from opt_program copy_file_name opt_file_name copy_delimiter opt_with
 			copy_options where_clause OptSingleRowErrorHandling
 				{
 					CopyStmt *n = makeNode(CopyStmt);
@@ -4375,8 +4520,9 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list
 					n->is_from = $5;
 					n->is_program = $6;
 					n->filename = $7;
-					n->whereClause = $11;
-					n->sreh = $12;
+					n->dirfilename = $8;
+					n->whereClause = $12;
+					n->sreh = $13;
 
 					if (n->is_program && n->filename == NULL)
 						ereport(ERROR,
@@ -4388,16 +4534,16 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
 								 errmsg("WHERE clause not allowed with COPY TO"),
-								 parser_errposition(@11)));
+								 parser_errposition(@12)));
 
 					n->options = NIL;
 					/* Concatenate user-supplied flags */
 					if ($2)
 						n->options = lappend(n->options, $2);
-					if ($8)
-						n->options = lappend(n->options, $8);
-					if ($10)
-						n->options = list_concat(n->options, $10);
+					if ($9)
+						n->options = lappend(n->options, $9);
+					if ($11)
+						n->options = list_concat(n->options, $11);
 					$$ = (Node *)n;
 				}
 			| COPY '(' PreparableStmt ')' TO opt_program copy_file_name opt_with copy_options
@@ -4450,6 +4596,11 @@ copy_file_name:
 			| STDIN									{ $$ = NULL; }
 			| STDOUT								{ $$ = NULL; }
 		;
+
+opt_file_name:
+            Sconst                                  { $$ = $1; }
+            | /* EMPTY */                           { $$ = NULL; }
+        ;
 
 copy_options: copy_opt_list							{ $$ = $1; }
 			| '(' copy_generic_opt_list ')'			{ $$ = $2; }
@@ -4533,6 +4684,10 @@ copy_opt_item:
 			| IGNORE_P FOREIGN PARTITIONS
 				{
 					$$ = makeDefElem("skip_foreign_partitions", (Node *)makeInteger(true), @1);
+				}
+			| TAG Sconst
+				{
+					$$ = makeDefElem("tag", (Node *)makeString($2), @1);
 				}
 		;
 
@@ -5659,7 +5814,22 @@ DistributedBy:   DISTRIBUTED BY  '(' distributed_by_list ')'
 			}
 		;
 
-OptDistributedBy:   DistributedBy			{ $$ = $1; }
+OptDistributedBy:   DistributedBy
+			{
+				/*
+				 * In singlenode mode, distributed by clause has no real effect.
+				 * We simply ignore it and issue a warning to ensure compatibility.
+				 */
+				if (IS_SINGLENODE())
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								errmsg("DISTRIBUTED BY clause has no effect in singlenode mode")));
+					$$ = NULL;
+				}
+				else
+					$$ = $1;
+			}
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -6703,31 +6873,33 @@ ext_opt_encoding_item:
  *****************************************************************************/
 
 CreateMatViewStmt:
-		CREATE OptNoLog MATERIALIZED VIEW create_mv_target AS SelectStmt opt_with_data OptDistributedBy
+		CREATE OptNoLog incremental MATERIALIZED VIEW create_mv_target AS SelectStmt opt_with_data OptDistributedBy
 				{
 					CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
-					ctas->query = $7;
-					ctas->into = $5;
+					ctas->query = $8;
+					ctas->into = $6;
 					ctas->objtype = OBJECT_MATVIEW;
 					ctas->is_select_into = false;
 					ctas->if_not_exists = false;
 					/* cram additional flags into the IntoClause */
-					$5->rel->relpersistence = $2;
-					$5->skipData = !($8);
-					ctas->into->distributedBy = $9;
+					$6->rel->relpersistence = $2;
+					$6->skipData = !($9);
+					$6->ivm = $3;
+					ctas->into->distributedBy = $10;
 					$$ = (Node *) ctas;
 				}
-		| CREATE OptNoLog MATERIALIZED VIEW IF_P NOT EXISTS create_mv_target AS SelectStmt opt_with_data
+		| CREATE OptNoLog incremental MATERIALIZED VIEW IF_P NOT EXISTS create_mv_target AS SelectStmt opt_with_data
 				{
 					CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
-					ctas->query = $10;
-					ctas->into = $8;
+					ctas->query = $11;
+					ctas->into = $9;
 					ctas->objtype = OBJECT_MATVIEW;
 					ctas->is_select_into = false;
 					ctas->if_not_exists = true;
 					/* cram additional flags into the IntoClause */
-					$8->rel->relpersistence = $2;
-					$8->skipData = !($11);
+					$9->rel->relpersistence = $2;
+					$9->skipData = !($12);
+					$9->ivm = $3;
 					$$ = (Node *) ctas;
 				}
 		;
@@ -6744,9 +6916,14 @@ create_mv_target:
 					$$->tableSpaceName = $5;
 					$$->viewQuery = NULL;		/* filled at analysis time */
 					$$->skipData = false;		/* might get changed later */
+					$$->ivm = false;
 
 					$$->accessMethod = greenplumLegacyAOoptions($$->accessMethod, &$$->options);
 				}
+		;
+
+incremental:	INCREMENTAL					{ $$ = true; }
+			| /*EMPTY*/						{ $$ = false; }
 		;
 
 OptNoLog:	UNLOGGED					{ $$ = RELPERSISTENCE_UNLOGGED; }
@@ -6993,13 +7170,38 @@ opt_procedural:
  *
  *****************************************************************************/
 
-CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner LOCATION Sconst opt_reloptions
+CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner LOCATION Sconst opt_reloptions OptServer OptFileHandler
 				{
 					CreateTableSpaceStmt *n = makeNode(CreateTableSpaceStmt);
+					List	*fileHandler_list;
+					char    *tmpfilehandler;
 					n->tablespacename = $3;
 					n->owner = $4;
 					n->location = $6;
 					n->options = $7;
+
+					if ($8 != NULL)
+					{
+						n->options = lappend(n->options, $8);
+						n->options = lappend(n->options,
+									makeDefElem("path", (Node *)makeString($6), @6));
+					}
+					n->filehandler = $9;
+					if (n->filehandler)
+					{
+						tmpfilehandler = pstrdup(n->filehandler);
+						if (tmpfilehandler && !SplitIdentifierString(tmpfilehandler, ',', &fileHandler_list))
+					     		ereport(ERROR,
+					                    	(errcode(ERRCODE_SYNTAX_ERROR),
+					                     	 errmsg("invalid list syntax for \"handler\""),
+					                     	 parser_errposition(@9)));
+                        			if (tmpfilehandler && list_length(fileHandler_list) != 2)
+                            				ereport(ERROR,
+                                        			(errcode(ERRCODE_SYNTAX_ERROR),
+                                         			errmsg("invalid list syntax for \"handler\""),
+                                         			parser_errposition(@9)));
+					}
+
 					$$ = (Node *) n;
 				}
 		;
@@ -7007,6 +7209,16 @@ CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner LOCATION Sconst 
 OptTableSpaceOwner: OWNER RoleSpec		{ $$ = $2; }
 			| /*EMPTY */				{ $$ = NULL; }
 		;
+
+OptServer:      SERVER name             { $$ = makeDefElem("server", (Node *)makeString($2), @1); }
+                | /* EMPTY */           { $$ = NULL; }
+        ;
+
+OptFileHandler:
+		HANDLER Sconst              { $$ = $2; }
+		| HANDLER                   { $$ = NULL; }
+		| /* EMPTY */               { $$ = NULL; }
+	;
 
 /*****************************************************************************
  *
@@ -7445,7 +7657,7 @@ AlterFdwStmt: ALTER FOREIGN DATA_P WRAPPER name opt_fdw_options alter_generic_op
 				}
 		;
 
-/* Options definition for CREATE FDW, SERVER and USER MAPPING */
+/* Options definition for CREATE FDW, SERVER, STORAGE SERVER and USER MAPPING */
 create_generic_options:
 			OPTIONS '(' generic_option_list ')'			{ $$ = $3; }
 			| /*EMPTY*/									{ $$ = NIL; }
@@ -7596,6 +7808,74 @@ AlterForeignServerStmt: ALTER SERVER name foreign_server_version alter_generic_o
 					$$ = (Node *) n;
 				}
 		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             CREATE STORAGE SERVER name [OPTIONS]
+ *
+ *****************************************************************************/
+
+CreateStorageServerStmt:
+        CREATE STORAGE SERVER name create_generic_options
+            {
+                CreateStorageServerStmt *n = makeNode(CreateStorageServerStmt);
+                n->servername = $4;
+                n->if_not_exists = false;
+                n->options = $5;
+                $$ = (Node *) n;
+            }
+        | CREATE STORAGE SERVER IF_P NOT EXISTS name create_generic_options
+            {
+                CreateStorageServerStmt *n = makeNode(CreateStorageServerStmt);
+                n->servername = $7;
+                n->if_not_exists = true;
+                n->options = $8;
+                $$ = (Node *) n;
+            }
+        ;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				ALTER STORAGE SERVER name OPTIONS
+ *
+ ****************************************************************************/
+
+AlterStorageServerStmt:
+        ALTER STORAGE SERVER name alter_generic_options
+            {
+                AlterStorageServerStmt *n = makeNode(AlterStorageServerStmt);
+                n->servername = $4;
+                n->options = $5;
+                $$ = (Node *) n;
+            }
+        ;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				DROP STORAGE SERVER name
+ *
+ ****************************************************************************/
+
+DropStorageServerStmt:
+        DROP STORAGE SERVER name
+            {
+                DropStorageServerStmt *n = makeNode(DropStorageServerStmt);
+                n->servername = $4;
+                n->missing_ok = false;
+                $$ = (Node *) n;
+            }
+        | DROP STORAGE SERVER IF_P EXISTS name
+            {
+                DropStorageServerStmt *n = makeNode(DropStorageServerStmt);
+                n->servername = $6;
+                n->missing_ok = true;
+                $$ = (Node *) n;
+            }
+        ;
+
 
 /*****************************************************************************
  *
@@ -7817,6 +8097,141 @@ AlterUserMappingStmt: ALTER USER MAPPING FOR auth_ident SERVER name alter_generi
 					$$ = (Node *) n;
 				}
 		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             CREAT STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name [OPTIONS]
+ *
+ *****************************************************************************/
+
+CreateStorageUserMappingStmt:
+            CREATE STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name create_generic_options
+                {
+                    CreateStorageUserMappingStmt *n = makeNode(CreateStorageUserMappingStmt);
+                    n->user = $6;
+                    n->servername = $9;
+                    n->options = $10;
+                    n->if_not_exists = false;
+                    $$ = (Node *) n;
+                }
+            | CREATE STORAGE USER MAPPING IF_P NOT EXISTS FOR auth_ident
+            STORAGE SERVER name create_generic_options
+                {
+                    CreateStorageUserMappingStmt *n = makeNode(CreateStorageUserMappingStmt);
+                    n->user = $9;
+                    n->servername = $12;
+                    n->options = $13;
+                    n->if_not_exists = true;
+                    $$ = (Node *) n;
+                }
+            ;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				DROP STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name
+ *
+ * XXX you'd think this should have a CASCADE/RESTRICT option, even if it's
+ * only pro forma; but the SQL standard doesn't show one.
+ ****************************************************************************/
+
+DropStorageUserMappingStmt:
+            DROP STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name
+                {
+                    DropStorageUserMappingStmt *n = makeNode(DropStorageUserMappingStmt);
+                    n->user = $6;
+                    n->servername = $9;
+                    n->missing_ok = false;
+                    $$ = (Node *) n;
+                }
+            | DROP STORAGE USER MAPPING IF_P EXISTS FOR auth_ident STORAGE SERVER name
+                {
+                    DropStorageUserMappingStmt *n = makeNode(DropStorageUserMappingStmt);
+                    n->user = $8;
+                    n->servername = $11;
+                    n->missing_ok = true;
+                    $$ = (Node *) n;
+                }
+            ;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				ALTER STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name OPTIONS
+ *
+ ****************************************************************************/
+
+AlterStorageUserMappingStmt:
+            ALTER STORAGE USER MAPPING FOR auth_ident STORAGE SERVER name alter_generic_options
+                {
+                    AlterStorageUserMappingStmt *n = makeNode(AlterStorageUserMappingStmt);
+                    n->user = $6;
+                    n->servername = $9;
+                    n->options = $10;
+                    $$ = (Node *) n;
+                }
+            ;
+
+/*****************************************************************************
+ *
+ *		QUERY:
+ *             CREATE DIRECTORY TABLE relname SERVER name (...)
+ *
+ *****************************************************************************/
+
+CreateDirectoryTableStmt:
+            CREATE DIRECTORY TABLE qualified_name
+            table_access_method_clause OptTableSpace OptDistributedBy
+                {
+                    CreateDirectoryTableStmt *n = makeNode(CreateDirectoryTableStmt);
+                    $4->relpersistence = RELPERSISTENCE_PERMANENT;
+                    n->base.relation = $4;
+                    n->base.inhRelations = NIL;
+                    n->base.ofTypename = NULL;
+                    n->base.constraints = NIL;
+                    n->base.options = NIL;
+                    n->base.oncommit = ONCOMMIT_NOOP;
+                    /* TODO: support tablespace for data table ? */
+                    n->base.tablespacename = NULL;
+                    n->base.if_not_exists = false;
+                    n->base.distributedBy = (DistributedBy *) $7;
+                    if (n->base.distributedBy != NULL)
+                        ereport(ERROR,
+                                    (errcode(ERRCODE_SYNTAX_ERROR),
+                                     errmsg("Create directory table is not allowed to set distributed by."),
+                                     parser_errposition(@7)));
+                    n->base.relKind = RELKIND_DIRECTORY_TABLE;
+                    n->tablespacename = $6;
+
+                    $$ = (Node *) n;
+                }
+            | CREATE DIRECTORY TABLE IF_P NOT EXISTS qualified_name
+            table_access_method_clause OptTableSpace OptDistributedBy
+                {
+                    CreateDirectoryTableStmt *n = makeNode(CreateDirectoryTableStmt);
+                    $7->relpersistence = RELPERSISTENCE_PERMANENT;
+                    n->base.relation = $7;
+                    n->base.inhRelations = NIL;
+                    n->base.ofTypename = NULL;
+                    n->base.constraints = NIL;
+                    n->base.options = NIL;
+                    n->base.oncommit = ONCOMMIT_NOOP;
+                    /* TODO: support tablespace for data table? */
+                    n->base.tablespacename = NULL;
+                    n->base.if_not_exists = true;
+                    n->base.distributedBy = (DistributedBy *) $10;
+                    if (n->base.distributedBy != NULL)
+                        ereport(ERROR,
+                                    (errcode(ERRCODE_SYNTAX_ERROR),
+                                     errmsg("Create directory table is not allowed to set distributed by."),
+                                     parser_errposition(@10)));
+                    n->base.relKind = RELKIND_DIRECTORY_TABLE;
+                    n->tablespacename = $9;
+
+                    $$ = (Node *) n;
+                }
+            ;
 
 /*****************************************************************************
  *
@@ -8949,7 +9364,8 @@ object_type_any_name:
 			| INDEX									{ $$ = OBJECT_INDEX; }
 			| FOREIGN TABLE							{ $$ = OBJECT_FOREIGN_TABLE; }
 			| EXTERNAL TABLE						{ $$ = OBJECT_FOREIGN_TABLE; }
-			| EXTERNAL WEB TABLE					{ $$ = OBJECT_FOREIGN_TABLE; }	
+			| EXTERNAL WEB TABLE					{ $$ = OBJECT_FOREIGN_TABLE; }
+			| DIRECTORY TABLE					{ $$ = OBJECT_DIRECTORY_TABLE; }
 			| COLLATION								{ $$ = OBJECT_COLLATION; }
 			| CONVERSION_P							{ $$ = OBJECT_CONVERSION; }
 			| STATISTICS							{ $$ = OBJECT_STATISTIC_EXT; }
@@ -8969,6 +9385,7 @@ object_type_name:
 			drop_type_name							{ $$ = $1; }
 			| DATABASE								{ $$ = OBJECT_DATABASE; }
 			| ROLE									{ $$ = OBJECT_ROLE; }
+			| PROFILE								{ $$ = OBJECT_PROFILE; }
 			| SUBSCRIPTION							{ $$ = OBJECT_SUBSCRIPTION; }
 			| TABLESPACE							{ $$ = OBJECT_TABLESPACE; }
 			| RESOURCE QUEUE						{ $$ = OBJECT_RESQUEUE; }
@@ -10028,7 +10445,7 @@ opt_index_name:
 
 access_method_clause:
 			USING name								{ $$ = $2; }
-			| /*EMPTY*/								{ $$ = DEFAULT_INDEX_TYPE; }
+			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
 index_params:	index_elem							{ $$ = list_make1($1); }
@@ -11698,6 +12115,15 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+            | ALTER PROFILE name RENAME TO name
+                {
+                    RenameStmt *n = makeNode(RenameStmt);
+                    n->renameType = OBJECT_PROFILE;
+                    n->subname = $3;
+                    n->newname = $6;
+                    n->missing_ok = false;
+                    $$ = (Node *)n;
+                }
 		;
 
 opt_column: COLUMN
@@ -16788,7 +17214,19 @@ table_value_select_clause:
 		SelectStmt scatter_clause
 		{
 			SelectStmt	*s	 = (SelectStmt *) $1;
-			s->scatterClause = $2;
+			/*
+			 * In singlenode mode, scatter clause has no real effect.
+			 * We simply ignore it and issue a warning to ensure compatibility.
+			 */
+			if (IS_SINGLENODE())
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("SCATTER BY clause has no effect in singlenode mode")));
+				s->scatterClause = NIL;
+			}
+			else
+				s->scatterClause = $2;
 			$$ = (Node *) s;
 		}
   		;
@@ -18501,6 +18939,7 @@ unreserved_keyword:
 			  ABORT_P
 			| ABSOLUTE_P
 			| ACCESS
+			| ACCOUNT
 			| ACTION
 			| ACTIVE
 			| ADD_P
@@ -18575,6 +19014,7 @@ unreserved_keyword:
 			| DEPTH
 			| DETACH
 			| DICTIONARY
+			| DIRECTORY
 			| DISABLE_P
 			| DISCARD
 			| DOCUMENT_P
@@ -18601,6 +19041,7 @@ unreserved_keyword:
 			| EXPRESSION
 			| EXTENSION
 			| EXTERNAL
+			| FAILED_LOGIN_ATTEMPTS
 			| FAMILY
 			| FIELDS
 			| FILL
@@ -18634,6 +19075,7 @@ unreserved_keyword:
 			| INCLUDING
 			| INCLUSIVE
 			| INCREMENT
+			| INCREMENTAL
 			| INDEX
 			| INDEXES
 			| INHERIT
@@ -18717,6 +19159,8 @@ unreserved_keyword:
 			| PARTITIONS
 			| PASSING
 			| PASSWORD
+			| PASSWORD_LOCK_TIME
+			| PASSWORD_REUSE_MAX
 			| PERCENT
 			| PERSISTENTLY
 			| PLANS
@@ -18729,6 +19173,7 @@ unreserved_keyword:
 			| PROCEDURAL
 			| PROCEDURE
 			| PROCEDURES
+			| PROFILE
 			| PROGRAM
 			| PROTOCOL
 			| PUBLICATION
@@ -18789,6 +19234,7 @@ unreserved_keyword:
 			| SETS
 			| SHARE
 			| SHOW
+			| SHRINK
 			| SIMPLE
 			| SKIP
 			| SNAPSHOT
@@ -18812,6 +19258,7 @@ unreserved_keyword:
 			| SYSTEM_P
 			| TABLES
 			| TABLESPACE
+			| TAG
 			| TASK
 			| TEMP
 			| TEMPLATE
@@ -18831,6 +19278,7 @@ unreserved_keyword:
 			| UNENCRYPTED
 			| UNKNOWN
 			| UNLISTEN
+			| UNLOCK_P
 			| UNLOGGED
 			| UNTIL
 			| UPDATE
@@ -18939,6 +19387,7 @@ PartitionIdentKeyword: ABORT_P
 			| DEPTH
 			| DETACH
 			| DICTIONARY
+			| DIRECTORY
 			| DISABLE_P
 			| DOMAIN_P
 			| DOUBLE_P
@@ -19378,6 +19827,7 @@ bare_label_keyword:
 			  ABORT_P
 			| ABSOLUTE_P
 			| ACCESS
+			| ACCOUNT
 			| ACTION
 			| ACTIVE
 			| ADD_P
@@ -19489,6 +19939,7 @@ bare_label_keyword:
 			| DESC
 			| DETACH
 			| DICTIONARY
+			| DIRECTORY
 			| DISABLE_P
 			| DISCARD
 			| DISTINCT
@@ -19522,6 +19973,7 @@ bare_label_keyword:
 			| EXTENSION
 			| EXTERNAL
 			| EXTRACT
+			| FAILED_LOGIN_ATTEMPTS
 			| FALSE_P
 			| FAMILY
 			| FIELDS
@@ -19564,6 +20016,7 @@ bare_label_keyword:
 			| INCLUDING
 			| INCLUSIVE
 			| INCREMENT
+			| INCREMENTAL
 			| INDEX
 			| INDEXES
 			| INHERIT
@@ -19675,6 +20128,8 @@ bare_label_keyword:
 			| PARTITIONS
 			| PASSING
 			| PASSWORD
+			| PASSWORD_LOCK_TIME
+			| PASSWORD_REUSE_MAX
 			| PERCENT
 			| PERSISTENTLY
 			| PLACING
@@ -19692,6 +20147,7 @@ bare_label_keyword:
 			| PROCEDURAL
 			| PROCEDURE
 			| PROCEDURES
+			| PROFILE
 			| PROGRAM
 			| PROTOCOL
 			| PUBLICATION
@@ -19758,6 +20214,7 @@ bare_label_keyword:
 			| SETS
 			| SHARE
 			| SHOW
+			| SHRINK
 			| SIMILAR
 			| SIMPLE
 			| SKIP
@@ -19788,6 +20245,7 @@ bare_label_keyword:
 			| TABLES
 			| TABLESAMPLE
 			| TABLESPACE
+			| TAG
 			| TASK
 			| TEMP
 			| TEMPLATE
@@ -19816,6 +20274,7 @@ bare_label_keyword:
 			| UNIQUE
 			| UNKNOWN
 			| UNLISTEN
+			| UNLOCK_P
 			| UNLOGGED
 			| UNTIL
 			| UPDATE

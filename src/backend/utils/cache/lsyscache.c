@@ -866,8 +866,8 @@ equality_ops_are_compatible(Oid opno1, Oid opno2)
 		Form_pg_amop op_form = (Form_pg_amop) GETSTRUCT(op_tuple);
 
 		/* must be btree or hash */
-		if (op_form->amopmethod == BTREE_AM_OID ||
-			op_form->amopmethod == HASH_AM_OID)
+		if (IsIndexAccessMethod(op_form->amopmethod, BTREE_AM_OID) ||
+			IsIndexAccessMethod(op_form->amopmethod, HASH_AM_OID))
 		{
 			if (op_in_opfamily(opno2, op_form->amopfamily))
 			{
@@ -2043,6 +2043,30 @@ is_agg_partial_capable(Oid aggid)
 	ReleaseSysCache(aggTuple);
 
 	return result;
+}
+
+/*
+ * get_rel_relisivm
+ *
+ *		Returns the relisivm flag associated with a given relation.
+ */
+bool
+get_rel_relisivm(Oid relid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_class reltup = (Form_pg_class) GETSTRUCT(tp);
+		bool		result;
+
+		result = reltup->relisivm;
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return false;
 }
 
 /*

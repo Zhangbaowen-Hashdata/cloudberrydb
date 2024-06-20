@@ -113,7 +113,7 @@ extern bool ExecMaterializesOutput(NodeTag plantype);
 /*
  * prototypes from functions in execCurrent.c
  */
-extern void getCurrentOf(CurrentOfExpr *cexpr,
+extern bool getCurrentOf(CurrentOfExpr *cexpr,
 			  ExprContext *econtext,
 			  Oid table_oid,
 			  ItemPointer current_tid,
@@ -217,7 +217,7 @@ extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
 extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
-extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
+extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation, ModifyTableState *mtstate);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
 							  Index resultRelationIndex,
@@ -702,6 +702,8 @@ extern GpExecIdentity getGpExecIdentity(QueryDesc *queryDesc,
 										  EState	   *estate);
 extern void mppExecutorFinishup(QueryDesc *queryDesc);
 extern void mppExecutorCleanup(QueryDesc *queryDesc);
+extern uint64 mppExecutorWait(QueryDesc *queryDesc);
+
 
 extern ResultRelInfo *targetid_get_partition(Oid targetid, EState *estate, bool openIndices);
 extern ResultRelInfo *slot_get_partition(TupleTableSlot *slot, EState *estate, bool openIndices);

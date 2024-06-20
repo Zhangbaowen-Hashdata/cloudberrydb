@@ -1789,8 +1789,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					case MOTIONTYPE_BROADCAST:
 						sname = "Broadcast Motion";
 						break;
-					case MOTIONTYPE_PARALLEL_BROADCAST:
-						sname = "Parallel Broadcast Motion";
+					case MOTIONTYPE_BROADCAST_WORKERS:
+						sname = "Broadcast Workers Motion";
 						break;
 					case MOTIONTYPE_EXPLICIT:
 						sname = "Explicit Redistribute Motion";
@@ -2083,9 +2083,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	}
 
 	if (ResManagerPrintOperatorMemoryLimits())
-	{
-		ExplainPropertyInteger("operatorMem", "kB", PlanStateOperatorMemKB(planstate), es);
-	}
+		appendStringInfo(es->str, "  (operatorMem: "UINT64_FORMAT"kB)", PlanStateOperatorMemKB(planstate));
 	/*
 	 * We have to forcibly clean up the instrumentation state because we
 	 * haven't done ExecutorEnd yet.  This is pretty grotty ...
@@ -5799,7 +5797,7 @@ Explainlocus(ExplainState *es, CdbLocusType locustype, int parallel)
 			locus = "SegmentGeneralWorkers";
 			break;
 		case CdbLocusType_OuterQuery:
-			locus = "OuteryQuery";
+			locus = "OuterQuery";
 			break;
 		case CdbLocusType_Replicated:
 			locus = "Replicated";

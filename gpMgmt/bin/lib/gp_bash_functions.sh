@@ -87,7 +87,7 @@ MV=`findCmdInPath mv`
 MKDIR=`findCmdInPath mkdir`
 PING=`findCmdInPath ping`
 RM=`findCmdInPath rm`
-SCP=`findCmdInPath scp`
+RSYNC=`findCmdInPath rsync`
 SED=`findCmdInPath sed`
 SLEEP=`findCmdInPath sleep`
 SORT=`findCmdInPath sort`
@@ -158,7 +158,7 @@ PG_CONF=postgresql.conf
 PG_INTERNAL_CONF=internal.auto.conf
 PG_HBA=pg_hba.conf
 if [ x"$TRUSTED_SHELL" = x"" ]; then TRUSTED_SHELL="$SSH"; fi
-if [ x"$TRUSTED_COPY" = x"" ]; then TRUSTED_COPY="$SCP"; fi
+if [ x"$TRUSTED_COPY" = x"" ]; then TRUSTED_COPY="$RSYNC  "; fi
 PG_CONF_ADD_FILE=$WORKDIR/postgresql_conf_gp_additions
 DEFAULTDB=template1
 ETCD_CONFIG_TMP_FILE=/tmp/cbdb_etcd.conf
@@ -1301,9 +1301,9 @@ SETUP_FTS() {
     FTS_LOG_DIR=$2
     FTS_START_MODE=$3
     if [ "$FTS_START_MODE" = "DEMO" ];then
-        nohup $GPHOME/bin/gpfts -F $GPHOME/bin/config/cbdb_etcd_default.conf -d ${FTS_LOG_DIR}/log/fts -D -C -a >/dev/null 2>&1 &
+        nohup $GPHOME/bin/gpsync -F $GPHOME/bin/config/cbdb_etcd_default.conf -d ${FTS_LOG_DIR}/log/fts -D -C -a >/dev/null 2>&1 &
     else
-        gpscp -h ${FTS_HOST} $ETCD_CONFIG_FILE_PATH =:${ETCD_CONFIG_TMP_FILE}
+        gpsync -h ${FTS_HOST} $ETCD_CONFIG_FILE_PATH =:${ETCD_CONFIG_TMP_FILE}
         FTS_CMD="mkdir -p ${FTS_LOG_DIR}/log/fts;nohup ${GPHOME}/bin/gpfts -F ${ETCD_CONFIG_TMP_FILE} -d ${FTS_LOG_DIR}/log/fts >/dev/null 2>&1 &"
         gpssh -h ${FTS_HOST} -e "${FTS_CMD}"
     fi

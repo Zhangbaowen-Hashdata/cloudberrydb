@@ -1061,6 +1061,7 @@ typedef struct HashJoin
 	List	   *hashkeys;
 	List	   *hashqualclauses;
 	bool	    batch0_barrier;
+	bool	    outer_motionhazard; /* CBDB_PARALLEL: for parallel aware join */
 } HashJoin;
 
 #define SHARE_ID_NOT_SHARED (-1)
@@ -1098,6 +1099,9 @@ typedef struct ShareInputScan
 
 	/* Number of consumer slices participating, not including the producer. */
 	int			nconsumers;
+
+	/* Discard the scan output? True for ORCA CTE producer, false otherwise. */
+	bool        discard_output;
 } ShareInputScan;
 
 /* ----------------
@@ -1452,7 +1456,7 @@ typedef enum MotionType
 	MOTIONTYPE_GATHER_SINGLE, /* Execute subplan on N nodes, but only send the tuples from one */
 	MOTIONTYPE_HASH,		/* Use hashing to select a segindex destination */
 	MOTIONTYPE_BROADCAST,	/* Send tuples from one sender to a fixed set of segindexes */
-	MOTIONTYPE_PARALLEL_BROADCAST, /*  */
+	MOTIONTYPE_BROADCAST_WORKERS, /* CBDB_PARALLEL: Send tuples across worker processes of a fixed set of segindexes */
 	MOTIONTYPE_EXPLICIT,	/* Send tuples to the segment explicitly specified in their segid column */
 	MOTIONTYPE_OUTER_QUERY	/* Gather or Broadcast to outer query's slice, don't know which one yet */
 } MotionType;

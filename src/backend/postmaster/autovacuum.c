@@ -122,6 +122,7 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_database.h"
 #include "commands/dbcommands.h"
 #include "commands/vacuum.h"
@@ -1588,7 +1589,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 	am_autovacuum_worker = true;
 
 	/* MPP-4990: Autovacuum always runs as utility-mode */
-	if (IS_QUERY_DISPATCHER())
+	if (IS_QUERY_DISPATCHER() && !IS_SINGLENODE())
 		Gp_role = GP_ROLE_DISPATCH;
 	else
 		Gp_role = GP_ROLE_UTILITY;
@@ -2172,6 +2173,7 @@ do_autovacuum(void)
 		bool		wraparound;
 
 		if (classForm->relkind != RELKIND_RELATION &&
+			classForm->relkind != RELKIND_DIRECTORY_TABLE &&
 			classForm->relkind != RELKIND_MATVIEW &&
 			classForm->relkind != RELKIND_AOSEGMENTS &&
 			classForm->relkind != RELKIND_AOBLOCKDIR &&
@@ -2361,7 +2363,8 @@ do_autovacuum(void)
 		 * completely unrelated to the one we saw before.
 		 */
 		if (!((classForm->relkind == RELKIND_RELATION ||
-			   classForm->relkind == RELKIND_MATVIEW) &&
+			   classForm->relkind == RELKIND_MATVIEW ||
+			   classForm->relkind == RELKIND_DIRECTORY_TABLE) &&
 			  classForm->relpersistence == RELPERSISTENCE_TEMP))
 		{
 			UnlockRelationOid(relid, AccessExclusiveLock);
@@ -2853,16 +2856,27 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 {
 	bytea	   *relopts;
 	AutoVacOpts *av;
+	Oid relam;
+	const TableAmRoutine *tam;
 
 	Assert(((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_RELATION ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_MATVIEW ||
+		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_DIRECTORY_TABLE ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_TOASTVALUE ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_AOSEGMENTS ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_AOBLOCKDIR ||
-		   ((Form_pg_class) GETSTRUCT(tup))->relkind ==  RELKIND_AOVISIMAP);
+		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_AOVISIMAP);
 
+	relam = ((Form_pg_class) GETSTRUCT(tup))->relam;
+	tam = GetTableAmRoutineByAmId(relam);
 
-	relopts = extractRelOptions(tup, pg_class_desc, NULL);
+	/* FIXME: external TAM may have reloption other than StdRdOptions. */
+	if (relam != HEAP_TABLE_AM_OID &&
+		relam != AO_ROW_TABLE_AM_OID &&
+		relam != AO_COLUMN_TABLE_AM_OID)
+		return NULL;
+
+	relopts = extractRelOptions(tup, pg_class_desc, tam->amoptions);
 	if (relopts == NULL)
 		return NULL;
 

@@ -445,6 +445,9 @@ typedef enum NodeTag
 	T_CreateRoleStmt,
 	T_AlterRoleStmt,
 	T_DropRoleStmt,
+	T_CreateProfileStmt,
+	T_AlterProfileStmt,
+	T_DropProfileStmt,
 	T_CreateQueueStmt,
 	T_AlterQueueStmt,
 	T_DropQueueStmt,
@@ -487,9 +490,15 @@ typedef enum NodeTag
 	T_AlterFdwStmt,
 	T_CreateForeignServerStmt,
 	T_AlterForeignServerStmt,
+	T_CreateStorageServerStmt,
+	T_AlterStorageServerStmt,
+	T_DropStorageServerStmt,
 	T_CreateUserMappingStmt,
 	T_AlterUserMappingStmt,
 	T_DropUserMappingStmt,
+	T_CreateStorageUserMappingStmt,
+	T_AlterStorageUserMappingStmt,
+	T_DropStorageUserMappingStmt,
 	T_AlterTableSpaceOptionsStmt,
 	T_AlterTableMoveAllStmt,
 	T_SecLabelStmt,
@@ -524,6 +533,7 @@ typedef enum NodeTag
 	T_PartitionBy,
 	T_PartitionRangeItem,
 	T_PartitionValuesSpec,
+	T_CreateDirectoryTableStmt,
 	T_CreateFileSpaceStmt,
 	T_FileSpaceEntry,
 	T_DropFileSpaceStmt,
@@ -656,6 +666,7 @@ typedef enum NodeTag
 	T_GpPolicy,					/* in catalog/gp_distribution_policy.h */
 	T_RetrieveStmt,
 	T_ReindexIndexInfo,			/* in nodes/parsenodes.h */
+	T_EphemeralNamedRelationInfo, /* utils/queryenvironment.h */
 
 } NodeTag;
 

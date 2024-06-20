@@ -344,10 +344,19 @@ analyze_rel_internal(Oid relid, RangeVar *relation,
 	 * Check that it's of an analyzable relkind, and set up appropriately.
 	 */
 	if (onerel->rd_rel->relkind == RELKIND_RELATION ||
-		onerel->rd_rel->relkind == RELKIND_MATVIEW)
+		onerel->rd_rel->relkind == RELKIND_MATVIEW ||
+		onerel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE)
 	{
 		/* Regular table, so we'll use the regular row acquisition function */
-		acquirefunc = acquire_sample_rows;
+		if (onerel->rd_tableam)
+			acquirefunc = onerel->rd_tableam->acquire_sample_rows;
+
+		/*
+		 * If the TableAmRoutine's acquire_sample_rows if NULL, we use
+		 * acquire_sample_rows as default.
+		 */
+		if (acquirefunc == NULL)
+			acquirefunc = acquire_sample_rows;
 
 		/* Also get regular table's size */
 		relpages = AcquireNumberOfBlocks(onerel);
@@ -1621,8 +1630,9 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 * GPDB_12_MERGE_FIXME: BlockNumber is uint32 and Number of tuples is uint64.
 	 * That means that after row number UINT_MAX we will never analyze the table.
 	 */
-	if (RelationIsAppendOptimized(onerel))
+	if (RelationIsNonblockRelation(onerel))
 	{
+		/* AO/CO/PAX use non-fixed block layout */
 		BlockNumber pages;
 		double		tuples;
 		double		allvisfrac;
@@ -1653,7 +1663,7 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 * because Blocks is not same as Heap tables.
 	 * Set prefetch_maximum to zero seems the easiest way to bypass.
 	 */
-	if (RelationIsAppendOptimized(onerel))
+	if (RelationIsNonblockRelation(onerel))
 	{
 		prefetch_maximum = 0;
 	}
@@ -1907,7 +1917,7 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 	 * Like in acquire_sample_rows(), if we're in the QD, fetch the sample
 	 * from segments.
 	 */
-	if (Gp_role == GP_ROLE_DISPATCH)
+	if (Gp_role == GP_ROLE_DISPATCH && ENABLE_DISPATCH())
 	{
 		return acquire_sample_rows_dispatcher(onerel,
 											  true, /* inherited stats */
@@ -1975,10 +1985,20 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 
 		/* Check table type (MATVIEW can't happen, but might as well allow) */
 		if (childrel->rd_rel->relkind == RELKIND_RELATION ||
-			childrel->rd_rel->relkind == RELKIND_MATVIEW)
+			childrel->rd_rel->relkind == RELKIND_MATVIEW ||
+			childrel->rd_rel->relkind == RELKIND_DIRECTORY_TABLE)
 		{
 			/* Regular table, so use the regular row acquisition function */
-			acquirefunc = acquire_sample_rows;
+			if (childrel->rd_tableam)
+				acquirefunc = childrel->rd_tableam->acquire_sample_rows;
+
+			/*
+			 * If the TableAmRoutine's acquire_sample_rows if NULL, we use
+			 * acquire_sample_rows as default.
+			 */
+			if (acquirefunc == NULL)
+				acquirefunc = acquire_sample_rows;
+
 			relpages = AcquireNumberOfBlocks(childrel);
 		}
 		else if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)

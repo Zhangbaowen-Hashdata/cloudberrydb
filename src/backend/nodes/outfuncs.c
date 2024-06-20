@@ -864,6 +864,7 @@ _outHashJoin(StringInfo str, const HashJoin *node)
 	WRITE_NODE_FIELD(hashkeys);
 	WRITE_NODE_FIELD(hashqualclauses);
 	WRITE_BOOL_FIELD(batch0_barrier);
+	WRITE_BOOL_FIELD(outer_motionhazard);
 }
 
 static void
@@ -1205,6 +1206,9 @@ _outIntoClause(StringInfo str, const IntoClause *node)
 	WRITE_NODE_FIELD(viewQuery);
 	WRITE_BOOL_FIELD(skipData);
 	WRITE_NODE_FIELD(distributedBy);
+	WRITE_BOOL_FIELD(ivm);
+	WRITE_OID_FIELD(matviewOid);
+	WRITE_STRING_FIELD(enrname);
 }
 
 static void
@@ -3276,6 +3280,10 @@ _outQuery(StringInfo str, const Query *node)
 			case T_AlterRoleSetStmt:
 			case T_DropRoleStmt:
 
+			case T_CreateProfileStmt:
+			case T_AlterProfileStmt:
+			case T_DropProfileStmt:
+
 			case T_CreateSchemaStmt:
 			case T_CreatePLangStmt:
 			case T_AlterOwnerStmt:
@@ -3491,6 +3499,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_NODE_FIELD(alias);
 	WRITE_NODE_FIELD(eref);
 	WRITE_ENUM_FIELD(rtekind, RTEKind);
+	WRITE_BOOL_FIELD(relisivm);
 
 	switch (node->rtekind)
 	{
@@ -4011,6 +4020,15 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 	WRITE_ENUM_FIELD(kind, PartitionRangeDatumKind);
 	WRITE_NODE_FIELD(value);
 	WRITE_LOCATION_FIELD(location);
+}
+
+static void
+_outCreateDirectoryTableStmt(StringInfo str, const CreateDirectoryTableStmt *node)
+{
+	WRITE_NODE_TYPE("CREATEDIRECTORYTABLESTMT");
+
+	_outCreateStmtInfo(str, (const CreateStmt *) node);
+	WRITE_STRING_FIELD(tablespacename);
 }
 
 #include "outfuncs_common.c"
@@ -4758,6 +4776,16 @@ outNode(StringInfo str, const void *obj)
 				_outAlterRoleSetStmt(str, obj);
 				break;
 
+			case T_CreateProfileStmt:
+				_outCreateProfileStmt(str, obj);
+				break;
+			case T_AlterProfileStmt:
+				_outAlterProfileStmt(str, obj);
+				break;
+			case T_DropProfileStmt:
+				_outDropProfileStmt(str, obj);
+				break;
+
 			case T_AlterSystemStmt:
 				_outAlterSystemStmt(str, obj);
 				break;
@@ -5135,7 +5163,12 @@ outNode(StringInfo str, const void *obj)
 			case T_GpPartitionListSpec:
 				_outGpPartitionListSpec(str, obj);
 				break;
-
+			case T_EphemeralNamedRelationInfo:
+				_outEphemeralNamedRelationInfo(str, obj);
+				break;
+			case T_CreateDirectoryTableStmt:
+				_outCreateDirectoryTableStmt(str, obj);
+				break;
 			default:
 
 				/*

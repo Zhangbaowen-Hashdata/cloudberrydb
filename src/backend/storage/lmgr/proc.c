@@ -46,6 +46,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/loginmonitor.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
@@ -203,6 +204,7 @@ InitProcGlobal(void)
 	ProcGlobal->spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 	ProcGlobal->freeProcs = NULL;
 	ProcGlobal->autovacFreeProcs = NULL;
+	ProcGlobal->lmFreeProcs = NULL;
 	ProcGlobal->bgworkerFreeProcs = NULL;
 	ProcGlobal->walsenderFreeProcs = NULL;
 	ProcGlobal->startupProc = NULL;
@@ -291,7 +293,14 @@ InitProcGlobal(void)
 			ProcGlobal->autovacFreeProcs = &procs[i];
 			procs[i].procgloballist = &ProcGlobal->autovacFreeProcs;
 		}
-		else if (i < MaxConnections + autovacuum_max_workers + 1 + max_worker_processes)
+		else if (i < MaxConnections + autovacuum_max_workers + 1 + login_monitor_max_processes)
+		{
+			/* PGPROC for login monitor, add to lmFreeProcs list */
+			procs[i].links.next = (SHM_QUEUE *) ProcGlobal->lmFreeProcs;
+			ProcGlobal->lmFreeProcs = &procs[i];
+			procs[i].procgloballist = &ProcGlobal->lmFreeProcs;
+		}
+		else if (i < MaxConnections + autovacuum_max_workers + 1 + login_monitor_max_processes + max_worker_processes)
 		{
 			/* PGPROC for bgworker, add to bgworkerFreeProcs list */
 			procs[i].links.next = (SHM_QUEUE *) ProcGlobal->bgworkerFreeProcs;
@@ -371,6 +380,8 @@ InitProcess(void)
 	/* Decide which list should supply our PGPROC. */
 	if (IsAnyAutoVacuumProcess())
 		procgloballist = &ProcGlobal->autovacFreeProcs;
+	else if (IsAnyLoginMonitorProcess())
+		procgloballist = &ProcGlobal->lmFreeProcs;
 	else if (IsBackgroundWorker)
 		procgloballist = &ProcGlobal->bgworkerFreeProcs;
 	else if (am_walsender)
@@ -444,11 +455,13 @@ InitProcess(void)
 	 * cleaning up.  (XXX autovac launcher currently doesn't participate in
 	 * this; it probably should.)
 	 *
+	 * Like autovac launcher, login monitor doesn't participate in this.
+	 *
 	 * Ideally, we should create functions similar to IsAutoVacuumLauncherProcess()
 	 * for ftsProber, etc who call InitProcess().
 	 * But MyPMChildSlot helps to get away with it.
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess()
+	if (IsUnderPostmaster && !(IsAutoVacuumLauncherProcess() || IsLoginMonitorLauncherProcess())
 		&& MyPMChildSlot > 0)
 		MarkPostmasterChildActive();
 
@@ -512,11 +525,11 @@ InitProcess(void)
 	 * connection on master.
      */
 	if (IS_QUERY_DISPATCHER() &&
-		Gp_role == GP_ROLE_DISPATCH &&
+		(Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) &&
 		gp_session_id == InvalidGpSessionId)
         gp_session_id = mppLocalProcessSerial;
 
-	AssertImply(Gp_role == GP_ROLE_UTILITY && !IS_QUERY_DISPATCHER(),
+	AssertImply(IS_UTILITY_BUT_NOT_SINGLENODE() && !IS_QUERY_DISPATCHER(),
 				gp_session_id == InvalidGpSessionId);
 
     MyProc->mppSessionId = gp_session_id;
@@ -889,7 +902,7 @@ LockErrorCleanup(void)
 	}
 
 	/* Don't try to cancel resource locks.*/
-	if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled() &&
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) && IsResQueueEnabled() &&
 		LOCALLOCK_LOCKMETHOD(*lockAwaited) == RESOURCE_LOCKMETHOD)
 		return;
 
@@ -1015,7 +1028,7 @@ ProcKill(int code, Datum arg)
 	 * Cleanup for any resource locks on portals - from holdable cursors or
 	 * unclean process abort (assertion failures).
 	 */
-	if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) && IsResQueueEnabled())
 		AtExitCleanup_ResPortals();
 
 	/*
@@ -1155,9 +1168,9 @@ ProcKill(int code, Datum arg)
 	/*
 	 * This process is no longer present in shared memory in any meaningful
 	 * way, so tell the postmaster we've cleaned up acceptably well. (XXX
-	 * autovac launcher should be included here someday)
+	 * autovac launcher and login monitor should be included here someday)
 	 */
-	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess()
+	if (IsUnderPostmaster && !IsAutoVacuumLauncherProcess() && !IsLoginMonitorLauncherProcess()
 		&& MyPMChildSlot > 0)
 		MarkPostmasterChildInactive();
 
@@ -2081,7 +2094,7 @@ CheckDeadLock(void)
 		 * return from the signal handler.
 		 */
 		Assert(MyProc->waitLock != NULL);
-		if (Gp_role == GP_ROLE_DISPATCH && IsResQueueEnabled() &&
+		if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE()) && IsResQueueEnabled() &&
 			LOCK_LOCKMETHOD(*(MyProc->waitLock)) == RESOURCE_LOCKMETHOD)
 		{
 			/*

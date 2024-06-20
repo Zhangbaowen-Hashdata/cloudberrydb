@@ -38,6 +38,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "postmaster/loginmonitor.h"
 #include "postmaster/fts.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -286,6 +287,12 @@ GetBackendTypeDesc(BackendType backendType)
 			break;
 		case B_LOGGER:
 			backendDesc = "logger";
+			break;
+		case B_LOGIN_MONITOR:
+			backendDesc = "login monitor";
+			break;
+		case B_LOGIN_MONITOR_WORKER:
+			backendDesc = "login monitor worker";
 			break;
 	}
 
@@ -796,7 +803,7 @@ InitializeSessionUserId(const char *rolename, Oid roleid)
 	 * queue. Do this even in standalone backend mode, just in case someone
 	 * gives the superuser a resource queue.
 	 */
-	if ((Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE() || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
 	{
 		SetResQueueId();
 	}
@@ -820,9 +827,10 @@ InitializeSessionUserIdStandalone(void)
 {
 	/*
 	 * This function should only be called in single-user mode, in autovacuum
-	 * workers, and in background workers.
+	 * workers, login monitor, and in background workers.
 	 */
 	AssertState(!IsUnderPostmaster || IsAutoVacuumWorkerProcess() || IsBackgroundWorker
+		    		|| IsAnyLoginMonitorProcess()
 				|| am_startup
 				|| (am_faulthandler && am_mirror)
 				|| (am_ftshandler && am_mirror));
@@ -865,7 +873,7 @@ SetSessionAuthorization(Oid userid, bool is_superuser)
 	SetSessionUserId(userid, is_superuser);
 
 	/* If resource scheduling enabled, set the cached queue for the new role.*/
-	if ((Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE() || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
 	{
 		SetResQueueId();
 	}
@@ -928,7 +936,7 @@ SetCurrentRoleId(Oid roleid, bool is_superuser)
 	SetOuterUserId(roleid);
 
 	/* If resource scheduling enabled, set the cached queue for the new role.*/
-	if ((Gp_role == GP_ROLE_DISPATCH || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
+	if ((Gp_role == GP_ROLE_DISPATCH || IS_SINGLENODE() || Gp_role == GP_ROLE_EXECUTE) && IsResQueueEnabled())
 	{
 		SetResQueueId();
 	}
@@ -1706,6 +1714,119 @@ char	   *local_preload_libraries_string = NULL;
 
 /* Flag telling that we are loading shared_preload_libraries */
 bool		process_shared_preload_libraries_in_progress = false;
+bool		process_shared_preload_libraries_done = false;
+
+/*
+ * process shared preload libraries array.
+ */
+static const char *process_shared_preload_libraries_array[] =
+{
+	#include "utils/process_shared_preload_libraries.h"
+};
+
+/*
+ * remove duplicates list.
+ */
+static List*
+removeDuplicates(List* elemlist)
+{
+	List* unique_arr = NIL;
+	int i, j;
+	ListCell *l;
+	ListCell *l2;
+	for (i = 0; i < list_length(elemlist); i++)
+	{
+		bool found = false;
+		l = &elemlist->elements[i];
+		char* a = (char*)lfirst(l);
+		for (j = 0; j < list_length(unique_arr); j++)
+		{
+			l2 = &unique_arr->elements[j];
+			char* b = (char*)lfirst(l2);
+			if (strcmp(a, b) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			unique_arr = lappend(unique_arr, pstrdup(a));
+		}
+	}
+	return unique_arr;
+}
+
+/*
+ * expand preload load libraries string.
+ */
+static char*
+expand_shared_preload_libraries_string()
+{
+	List	   *elemlist = NIL;
+	List	   *deduplicate_elemlist = NIL;
+	ListCell   *l;
+	char	   *rawstring;
+	char	   *libraries = shared_preload_libraries_string;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(libraries);
+	if (libraries != NULL && libraries[0] != '\0')
+	{
+		/* Parse string into list of filename paths */
+		if (!SplitDirectoriesString(rawstring, ',', &elemlist))
+		{
+			/* syntax error in list */
+			list_free_deep(elemlist);
+			pfree(rawstring);
+			ereport(LOG,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("invalid list syntax in parameter \"%s\"",
+							libraries)));
+			return NULL;
+		}
+
+	}
+
+	/* load expand libraries */
+	int shared_preload_libraries_num = sizeof(process_shared_preload_libraries_array) / sizeof(char *);
+	if (shared_preload_libraries_num > 0)
+	{
+		for (int i = 0; i < shared_preload_libraries_num; i++)
+		{
+			elemlist = lappend(elemlist, pstrdup((char*)process_shared_preload_libraries_array[i]));
+		}
+
+	}
+
+	if (list_length(elemlist) == 0)
+	{
+		list_free_deep(elemlist);
+		pfree(rawstring);
+		return NULL;
+	}
+
+
+	/* deduplicate list string */
+	deduplicate_elemlist = removeDuplicates(elemlist);
+
+	/* format string delimiter with ',' */
+	StringInfoData expand_string;
+	initStringInfo(&expand_string);
+	for (int i = 0; i < list_length(deduplicate_elemlist); i++)
+	{
+		l = &deduplicate_elemlist->elements[i];
+		if (i == 0)
+			appendStringInfo(&expand_string, "%s", (char*)lfirst(l));
+		else
+			appendStringInfo(&expand_string, ",%s", (char*)lfirst(l));
+	}
+	list_free_deep(elemlist);
+	list_free_deep(deduplicate_elemlist);
+	pfree(rawstring);
+	return expand_string.data;
+}
 
 /*
  * load the shared libraries listed in 'libraries'
@@ -1770,17 +1891,17 @@ process_shared_preload_libraries(void)
 {
 	process_shared_preload_libraries_in_progress = true;
 
-	load_libraries(shared_preload_libraries_string,
+	char *libraries = expand_shared_preload_libraries_string();
+	load_libraries(libraries,
 				   "shared_preload_libraries",
 				   false);
-
-#ifdef ENABLE_PRELOAD_IC_MODULE
-	load_libraries("interconnect",
-				   "preload interconnect module",
-				   false);
-#endif
+	if (libraries != NULL)
+	{
+		pfree(libraries);
+	}
 
 	process_shared_preload_libraries_in_progress = false;
+	process_shared_preload_libraries_done = true;
 }
 
 /*

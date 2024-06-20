@@ -4,6 +4,7 @@
  *	  routines for signaling between the postmaster and its child processes
  *
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -44,6 +45,9 @@ typedef enum
 	PMSIGNAL_WAKEN_FTS,         /* wake up FTS to probe segments */
 	PMSIGNAL_WAKEN_DTX_RECOVERY,         /* wake up dtx recovery to abort dtx xacts */
 	PMSIGNAL_DTM_RECOVERED,     /* distributed recovery completed */
+
+	PMSIGNAL_FAILED_LOGIN,		/* send signal SIGUSR1 to login monitor launcher */
+	PMSIGNAL_START_LOGIN_MONITOR_WORKER,	/* start a login monitor worker */
 
 	NUM_PMSIGNALS				/* Must be last value of enum! */
 } PMSignalReason;

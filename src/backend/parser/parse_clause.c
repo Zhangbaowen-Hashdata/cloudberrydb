@@ -646,7 +646,11 @@ transformRangeFunction(ParseState *pstate, RangeFunction *r)
 					rte = addRangeTableEntry(pstate, rel, r->alias, false, true);
 
 					/* Now we set our special attribute in the rte. */
-					rte->p_rte->forceDistRandom = true;
+					/*
+					 * However, in singlenode mode distribution is meaningless and might introduce unexpected
+					 * motions in the plan, which will lead to some assert failures.
+					 */
+					rte->p_rte->forceDistRandom = !IS_SINGLENODE();
 
 					return rte;
 				}
@@ -1315,7 +1319,8 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		if (rte->rtekind != RTE_RELATION ||
 			(rte->relkind != RELKIND_RELATION &&
 			 rte->relkind != RELKIND_MATVIEW &&
-			 rte->relkind != RELKIND_PARTITIONED_TABLE))
+			 rte->relkind != RELKIND_PARTITIONED_TABLE &&
+			 rte->relkind != RELKIND_DIRECTORY_TABLE))
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("TABLESAMPLE clause can only be applied to tables and materialized views"),

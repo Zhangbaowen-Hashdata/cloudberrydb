@@ -65,6 +65,7 @@
  * in the restore process be preassigned, a separate list of all such OIDs is
  * maintained and queried before assigning a new non-preassigned OID.
  *
+ * Portions Copyright (c) 2023, HashData Technology Limited.
  * Portions Copyright 2016-Present VMware, Inc. or its affiliates.
  * Portions Copyright (c) 1996-2008, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -80,6 +81,8 @@
 
 #include "catalog/catalog.h"
 #include "catalog/indexing.h"
+#include "catalog/gp_storage_server.h"
+#include "catalog/gp_storage_user_mapping.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
@@ -104,6 +107,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_policy.h"
+#include "catalog/pg_profile.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
@@ -356,7 +360,7 @@ GetNewOrPreassignedOid(Relation relation, Oid indexId, AttrNumber oidcolumn,
 			if (IS_QUERY_DISPATCHER() && IsBinaryUpgrade && Gp_role == GP_ROLE_UTILITY)
 				/*
 				 * If it hits here on the QD, it must be (IsBinaryUpgrade &&
-				 * Gp_role == GP_ROLE_UTILITY) already, however, check those
+				 * IS_UTILITY_OR_SINGLENODE(Gp_role)) already, however, check those
 				 * too in case we have new GP roles in the future, and for
 				 * better code readability.
 				 */
@@ -728,6 +732,22 @@ GetNewOidForExtprotocol(Relation relation, Oid indexId, AttrNumber oidcolumn,
 }
 
 Oid
+GetNewOidForProfile(Relation relation, Oid indexId, AttrNumber oidcolumn,
+			       			char *prfname)
+{
+	OidAssignment  key;
+
+	Assert(RelationGetRelid(relation) == ProfileRelationId);
+	Assert(indexId == ProfileOidIndexId);
+	Assert(oidcolumn == Anum_pg_profile_oid);
+
+	memset(&key, 0, sizeof(OidAssignment));
+	key.type = T_OidAssignment;
+	key.objname = prfname;
+	return GetNewOrPreassignedOid(relation, indexId, oidcolumn, &key);
+}
+
+Oid
 GetNewOidForForeignDataWrapper(Relation relation, Oid indexId, AttrNumber oidcolumn,
 							   char *fdwname)
 {
@@ -752,6 +772,23 @@ GetNewOidForForeignServer(Relation relation, Oid indexId, AttrNumber oidcolumn,
 	Assert(RelationGetRelid(relation) == ForeignServerRelationId);
 	Assert(indexId == ForeignServerOidIndexId);
 	Assert(oidcolumn == Anum_pg_foreign_server_oid);
+
+	memset(&key, 0, sizeof(OidAssignment));
+	key.type = T_OidAssignment;
+	key.objname = srvname;
+	return GetNewOrPreassignedOid(relation, indexId, oidcolumn, &key);
+
+}
+
+Oid
+GetNewOidForStorageServer(Relation relation, Oid indexId, AttrNumber oidcolumn,
+						  char *srvname)
+{
+	OidAssignment key;
+
+	Assert(RelationGetRelid(relation) == StorageServerRelationId);
+	Assert(indexId == StorageServerOidIndexId);
+	Assert(oidcolumn == Anum_gp_storage_server_oid);
 
 	memset(&key, 0, sizeof(OidAssignment));
 	key.type = T_OidAssignment;
@@ -1135,6 +1172,23 @@ GetNewOidForUserMapping(Relation relation, Oid indexId, AttrNumber oidcolumn,
 	Assert(RelationGetRelid(relation) == UserMappingRelationId);
 	Assert(indexId == UserMappingOidIndexId);
 	Assert(oidcolumn == Anum_pg_user_mapping_oid);
+
+	memset(&key, 0, sizeof(OidAssignment));
+	key.type = T_OidAssignment;
+	key.keyOid1 = umuser;
+	key.keyOid2 = umserver;
+	return GetNewOrPreassignedOid(relation, indexId, oidcolumn, &key);
+}
+
+Oid
+GetNewOidForStorageUserMapping(Relation relation, Oid indexId, AttrNumber oidcolumn,
+							   Oid umuser, Oid umserver)
+{
+	OidAssignment key;
+
+	Assert(RelationGetRelid(relation) == StorageUserMappingRelationId);
+	Assert(indexId == StorageUserMappingOidIndexId);
+	Assert(oidcolumn == Anum_gp_storage_user_mapping_oid);
 
 	memset(&key, 0, sizeof(OidAssignment));
 	key.type = T_OidAssignment;
