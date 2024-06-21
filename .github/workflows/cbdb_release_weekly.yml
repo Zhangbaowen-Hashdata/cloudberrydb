@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: cbdb-release-weekly
+          ref: cbdb-release-weekly_backup
           fetch-depth: 0
       - name: Environment Setup
         run: |
