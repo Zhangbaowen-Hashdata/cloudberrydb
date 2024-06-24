@@ -9,13 +9,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          ref: cbdb-release-weekly
+          ref: cbdb-weekly-tmp
           fetch-depth: 0
       - name: Environment Setup
         run: |
-          source ~/.bashrc
-          fpm --version
-
           pushd $GITHUB_WORKSPACE
           pushd deploy/build
           sudo bash README.CentOS.bash
