@@ -1,5 +1,6 @@
 name: Build and Release RPM Weekly
 on:
+  push:
   schedule:
     - cron: '0 16 * * 1'
 jobs:
@@ -102,4 +103,4 @@ jobs:
           prerelease: true
           generate_release_notes: true
         env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_NIGHTLY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
