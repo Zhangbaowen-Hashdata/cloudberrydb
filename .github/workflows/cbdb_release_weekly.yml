@@ -15,6 +15,7 @@ jobs:
         run: |
           source ~/.bashrc
           fpm --version
+
           pushd $GITHUB_WORKSPACE
           pushd deploy/build
           sudo bash README.CentOS.bash
