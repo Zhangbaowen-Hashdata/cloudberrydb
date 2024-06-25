@@ -5,7 +5,7 @@ on:
     - cron: '0 16 * * 1'
 jobs:
   Build-rpm:
-    runs-on: del-1
+    runs-on: del-2
     steps:
       - uses: actions/checkout@v3
         with:
