@@ -17,9 +17,11 @@ jobs:
           cat /home/gpadmin/.bashrc
           source /home/gpadmin/.bashrc
           rvm -v
-
           ruby -v
+          gem -v
+          which ruby
           which fpm
+          which gem
           fpm --version
           pushd $GITHUB_WORKSPACE
           pushd deploy/build
