@@ -13,12 +13,13 @@ jobs:
           fetch-depth: 0
       - name: Environment Setup
         run: |
+          whoami
           cat /home/gpadmin/.bashrc
-
           source /home/gpadmin/.bashrc
           rvm -v
 
           ruby -v
+          which fpm
           fpm --version
           pushd $GITHUB_WORKSPACE
           pushd deploy/build
