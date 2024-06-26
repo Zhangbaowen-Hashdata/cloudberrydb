@@ -2,7 +2,7 @@ name: Build and Release RPM Weekly
 on:
   push:
   schedule:
-    - cron: '* 11 * * 3'
+    - cron: '0 4 * * 3'
 jobs:
   Build-rpm:
     runs-on: del-2
