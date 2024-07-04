@@ -17,7 +17,6 @@ jobs:
           cat /home/gpadmin/.bashrc
           source /home/gpadmin/.bashrc
           rvm -v
-
           ruby -v
           gem -v
           which ruby
